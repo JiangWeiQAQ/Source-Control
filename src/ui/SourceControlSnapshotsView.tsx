@@ -105,6 +105,7 @@ export function SourceControlSnapshotsView({
     <List
       navigationTitle="Safety Snapshots"
       toolbar={{
+        topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => dismiss()} />,
         topBarTrailing: (
           <HStack spacing={12}>
             <Button

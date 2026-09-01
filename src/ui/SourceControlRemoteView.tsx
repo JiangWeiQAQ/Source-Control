@@ -3,6 +3,7 @@ import {
   HStack,
   Image,
   List,
+  Navigation,
   ProgressView,
   Section,
   Text,
@@ -19,6 +20,8 @@ export interface SourceControlRemoteViewProps {
 }
 
 type ActiveOperation = "remote" | "credential" | "fetch" | "push" | "pull" | null
+
+type OperationError = "Fetch Failed" | "Push Failed" | "Pull Failed" | "Remote Update Failed" | "Credential Update Failed"
 
 function isHttpsRemote(url: string): boolean {
   return /^https:\/\//i.test(url)
@@ -38,6 +41,7 @@ function syncStatusText(sync: GitAheadBehind | null): string {
 }
 
 export function SourceControlRemoteView({ gitService, onChanged }: SourceControlRemoteViewProps) {
+  const dismiss = Navigation.useDismiss()
   const [remotes, setRemotes] = useState<GitRemoteInfo[]>([])
   const [selectedRemoteName, setSelectedRemoteName] = useState<string | null>(null)
   const [branches, setBranches] = useState<GitRemoteBranch[]>([])
@@ -48,6 +52,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
   const [loading, setLoading] = useState(true)
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [errorTitle, setErrorTitle] = useState<OperationError>("Remote Update Failed")
 
   const selectedRemote = remotes.find((remote) => remote.name === selectedRemoteName) ?? null
   const matchingRemoteBranch = localBranch
@@ -59,6 +64,8 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
 
   const loadRemoteData = async (preferredRemoteName?: string | null) => {
     setLoading(true)
+    setErrorMessage(null)
+    setErrorTitle("Remote Update Failed")
     try {
       const [nextRemotes, nextLocalBranch, nextStatus] = await Promise.all([
         gitService.listRemotes(),
@@ -95,6 +102,8 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
         setSync(null)
       }
     } catch (error) {
+      setErrorTitle("Remote Update Failed")
+      setErrorTitle("Remote Update Failed")
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
       setLoading(false)
@@ -134,10 +143,12 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
 
     setActiveOperation("remote")
     setErrorMessage(null)
+    setErrorTitle("Remote Update Failed")
     try {
       await gitService.addRemote(name.trim(), url.trim())
       await loadRemoteData(name.trim())
     } catch (error) {
+      setErrorTitle("Remote Update Failed")
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
       setActiveOperation(null)
@@ -146,26 +157,13 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
 
   const setCredential = async () => {
     if (!selectedRemote || isBusy) return
-    const username = await Dialog.prompt({
-      title: "Set Credential",
-      message: "Username",
-      placeholder: "Username",
-      cancelLabel: "Cancel",
-      confirmLabel: "Next",
-    })
+    const username = await Dialog.prompt({ title: "Set Credential", message: "Username", placeholder: "Username", cancelLabel: "Cancel", confirmLabel: "Next" })
     if (username === null) return
-    const password = await Dialog.prompt({
-      title: "Set Credential",
-      message: "Password / Token",
-      placeholder: "Password / Token",
-      obscureText: true,
-      cancelLabel: "Cancel",
-      confirmLabel: "Save",
-    })
+    const password = await Dialog.prompt({ title: "Set Credential", message: "Password / Token", placeholder: "Password / Token", obscureText: true, cancelLabel: "Cancel", confirmLabel: "Save" })
     if (password === null) return
-
     setActiveOperation("credential")
     setErrorMessage(null)
+    setErrorTitle("Credential Update Failed")
     try {
       await gitService.setRemoteCredential(selectedRemote.name, { username, password })
       setHasCredential(await gitService.hasRemoteCredential(selectedRemote.name))
@@ -178,15 +176,11 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
 
   const removeCredential = async () => {
     if (!selectedRemote || isBusy) return
-    const selected = await Dialog.actionSheet({
-      title: "Remove stored credential?",
-      message: "This removes the stored credential for this remote, not the remote itself.",
-      actions: [{ label: "Remove", destructive: true }],
-    })
+    const selected = await Dialog.actionSheet({ title: "Remove Stored Credential?", message: "This removes the saved credential from Keychain.\nThe remote configuration will remain unchanged.", actions: [{ label: "Remove", destructive: true }] })
     if (selected !== 0) return
-
     setActiveOperation("credential")
     setErrorMessage(null)
+    setErrorTitle("Credential Update Failed")
     try {
       await gitService.removeRemoteCredential(selectedRemote.name)
       setHasCredential(await gitService.hasRemoteCredential(selectedRemote.name))
@@ -201,9 +195,11 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
     if (!selectedRemote || isBusy) return
     setActiveOperation("fetch")
     setErrorMessage(null)
+    setErrorTitle("Fetch Failed")
     try {
-      await gitService.fetchRemote(selectedRemote.name)
+      const result = await gitService.fetchRemote(selectedRemote.name)
       await loadRemoteData(selectedRemote.name)
+      await Dialog.alert({ title: "Fetch Completed", message: result.branch ? `${selectedRemote.name}/${result.branch}` : "Fetch completed." })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -215,9 +211,12 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
     if (!selectedRemote || !sync || !canPush || isBusy) return
     setActiveOperation("push")
     setErrorMessage(null)
+    setErrorTitle("Push Failed")
     try {
-      await gitService.pushRemote(selectedRemote.name, sync.remoteBranch)
+      const result = await gitService.pushRemote(selectedRemote.name, sync.remoteBranch)
       await loadRemoteData(selectedRemote.name)
+      const refreshedSync = await gitService.getAheadBehind(selectedRemote.name, sync.remoteBranch)
+      if (result.pushed && refreshedSync.ahead === 0 && refreshedSync.behind === 0) await Dialog.alert({ title: "Push Completed", message: "Up to Date" })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -227,21 +226,20 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
 
   const pullRemote = async () => {
     if (!selectedRemote || !sync || !canPull || isBusy) return
-    const selected = await Dialog.actionSheet({
-      title: `Pull from ${selectedRemote.name}/${sync.remoteBranch}?`,
-      message: "This will fast-forward your local branch and update files in the working tree.",
-      actions: [{ label: "Pull" }],
-    })
+    const selected = await Dialog.actionSheet({ title: `Pull from ${selectedRemote.name}/${sync.remoteBranch}?`, message: "This will fast-forward your local branch and update files in the working tree.", actions: [{ label: "Pull" }] })
     if (selected !== 0) return
-
     setActiveOperation("pull")
     setErrorMessage(null)
+    setErrorTitle("Pull Failed")
     try {
-      await gitService.pullRemote(selectedRemote.name, sync.remoteBranch)
+      const result = await gitService.pullRemote(selectedRemote.name, sync.remoteBranch)
       await onChanged()
       await loadRemoteData(selectedRemote.name)
+      if (result.pulled) await Dialog.alert({ title: "Pull Completed", message: "Working tree updated." })
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      setErrorMessage(message)
+      if (message.includes("Pull failed and rollback was incomplete") || message.includes("Repository requires manual inspection")) await Dialog.alert({ title: "Repository Requires Inspection", message })
     } finally {
       setActiveOperation(null)
     }
@@ -251,6 +249,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
     <List
       navigationTitle="Remote"
       toolbar={{
+        topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => dismiss()} />,
         topBarTrailing: (
           <Button
             title="Refresh"
@@ -265,7 +264,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
       {errorMessage ? (
         <Section>
           <VStack spacing={5} alignment="leading">
-            <HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">Sync Operation Failed</Text></HStack>
+            <HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">{errorTitle}</Text></HStack>
             <Text font="footnote" foregroundStyle="secondaryLabel">{errorMessage}</Text>
           </VStack>
         </Section>
@@ -306,7 +305,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
           <Section header={<Text>SYNC STATUS</Text>}>
             <VStack spacing={6} alignment="leading">
               <Text font="headline" foregroundStyle={sync?.diverged ? "orange" : undefined}>{syncStatusText(sync)}</Text>
-              {sync ? <Text font="footnote" foregroundStyle="secondaryLabel">{sync.ahead} ahead · {sync.behind} behind</Text> : <Text font="footnote" foregroundStyle="secondaryLabel">Fetch this remote to load a matching remote branch.</Text>}
+              {sync ? <Text font="footnote" foregroundStyle="secondaryLabel">Local {sync.ahead} · Remote {sync.behind}</Text> : <Text font="footnote" foregroundStyle="secondaryLabel">Fetch this remote to load a matching remote branch.</Text>}
               {sync?.diverged ? <Text font="footnote" foregroundStyle="secondaryLabel">Automatic merge is not supported yet.</Text> : null}
             </VStack>
           </Section>

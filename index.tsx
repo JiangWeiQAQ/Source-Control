@@ -6,7 +6,7 @@ async function run(): Promise<void> {
     await Navigation.present(<SourceControlProjectPickerView />)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    console.error(`Source Control 启动失败: ${message}`)
+
   } finally {
     Script.exit()
   }

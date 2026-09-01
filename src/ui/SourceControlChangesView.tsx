@@ -10,10 +10,9 @@ import {
   Section,
   Spacer,
   Text,
-  TextField,
+  VStack,
   useEffect,
   useState,
-  VStack,
 } from "scripting"
 import { GitService } from "../core/GitService"
 import { GitChange, GitRepositoryStatus } from "../core/types"
@@ -22,420 +21,127 @@ import { SourceControlHistoryView } from "./SourceControlHistoryView"
 import { SourceControlSnapshotsView } from "./SourceControlSnapshotsView"
 import { SourceControlRemoteView } from "./SourceControlRemoteView"
 
-export interface SourceControlChangesViewProps {
-  gitService?: GitService
-  projectPath?: string
-}
+export interface SourceControlChangesViewProps { gitService?: GitService; projectPath?: string }
+type ChangeFilter = "staged" | "unstaged"
+interface FolderGroup { path: string; files: GitChange[] }
 
-function getStatusPresentation(change: GitChange): {
-  label: string
-  color: "green" | "red" | "blue" | "orange"
-} {
+function getRepositoryDisplayName(path?: string): string {
+  if (!path) return "Source Control Stage Test"
+  return path.split("/").filter(Boolean).pop() || "Source Control Stage Test"
+}
+function statusInfo(change: GitChange): { label: string; color: "green" | "red" | "blue" | "orange" } {
   if (change.status === "added") return { label: "A", color: "green" }
   if (change.status === "deleted") return { label: "D", color: "red" }
   if (change.status === "untracked") return { label: "?", color: "orange" }
   return { label: "M", color: "blue" }
 }
-
-function getRepositoryDisplayName(projectPath?: string): string {
-  if (!projectPath) return "Source Control Stage Test"
-  const parts = projectPath.split("/").filter(Boolean)
-  return parts[parts.length - 1] || "Source Control Stage Test"
+function fileParts(filepath: string): { directory: string; filename: string } {
+  const parts = filepath.split("/")
+  const filename = parts.pop() || filepath
+  return { filename, directory: parts.join("/") || "ROOT" }
+}
+function folderGroups(changes: GitChange[]): FolderGroup[] {
+  const groups = new Map<string, GitChange[]>()
+  groups.set("ROOT", [])
+  changes.forEach((change) => {
+    const directory = fileParts(change.filepath).directory
+    groups.set(directory, [...(groups.get(directory) || []), change])
+  })
+  return Array.from(groups.entries()).map(([path, files]) => ({
+    path,
+    files: files.sort((a, b) => fileParts(a.filepath).filename.localeCompare(fileParts(b.filepath).filename)),
+  })).sort((a, b) => a.path === "ROOT" ? -1 : b.path === "ROOT" ? 1 : a.path.localeCompare(b.path))
 }
 
-function ChangeItemRow({
-  gitService,
-  change,
-  comparison,
-  onStatusChanged,
-  actionTitle,
-  actionImage,
-  action,
-  isOperationActive,
-}: {
-  gitService: GitService
-  change: GitChange
-  comparison: "unstaged" | "staged"
-  onStatusChanged: () => Promise<void>
-  actionTitle: string
-  actionImage: string
-  action: () => void
-  isOperationActive: boolean
-}) {
-  const status = getStatusPresentation(change)
-  const stagedState = comparison === "staged" ? "Staged" : "Working tree"
-
-  return (
-    <NavigationLink
-      disabled={isOperationActive}
-      destination={
-        <SourceControlDiffView
-          gitService={gitService}
-          change={change}
-          comparison={comparison}
-          onChanged={onStatusChanged}
-        />
-      }
-    >
-      <HStack
-        spacing={12}
-        alignment="center"
-        trailingSwipeActions={{
-          allowsFullSwipe: false,
-          actions: [
-            <Button
-              title={actionTitle}
-              systemImage={actionImage}
-              disabled={isOperationActive}
-              action={action}
-            />,
-          ],
-        }}
-      >
-        <Text font="caption" bold foregroundStyle={status.color}>
-          {status.label}
-        </Text>
-        <VStack spacing={3} alignment="leading">
-          <Text font="body">{change.filepath}</Text>
-          <Text font="caption" foregroundStyle="secondaryLabel">
-            {stagedState} · {change.status}
-          </Text>
-        </VStack>
-        <Spacer />
-        {isOperationActive ? <ProgressView /> : null}
-      </HStack>
-    </NavigationLink>
-  )
-}
-
-function EmptyChangesView({ loading }: { loading: boolean }) {
-  return (
-    <Section>
-      <VStack spacing={8} alignment="center">
-        {loading ? <ProgressView /> : <Image systemName="checkmark.circle" foregroundStyle="green" />}
-        <Text font="headline">{loading ? "Refreshing Changes" : "Working Tree Clean"}</Text>
-        <Text font="footnote" foregroundStyle="secondaryLabel">
-          {loading ? "Checking the repository status…" : "There are no staged or unstaged changes."}
-        </Text>
+function FileRow({ gitService, change, comparison, onChanged, disabled }: { gitService: GitService; change: GitChange; comparison: ChangeFilter; onChanged: () => Promise<void>; disabled: boolean }) {
+  const info = statusInfo(change)
+  const { filename } = fileParts(change.filepath)
+  return <NavigationLink disabled={disabled} destination={<SourceControlDiffView gitService={gitService} change={change} comparison={comparison} onChanged={onChanged} />}>
+    <HStack spacing={8} alignment="center" frame={{ maxWidth: "infinity", minHeight: 54, alignment: "leading" }}>
+      <Text font="headline" bold foregroundStyle={info.color}>{info.label}</Text>
+      <VStack spacing={2} alignment="leading">
+        <Text font="subheadline" lineLimit={2}>{filename}</Text>
+        <Text font="caption2" foregroundStyle="secondaryLabel">{info.label} · {change.status}</Text>
       </VStack>
-    </Section>
-  )
+      <Spacer />
+      <Image systemName="chevron.right" foregroundStyle="tertiaryLabel" />
+    </HStack>
+  </NavigationLink>
 }
+function FileBrowser({ groups, selectedFolder, onSelect, service, filter, onChanged, disabled }: { groups: FolderGroup[]; selectedFolder: string; onSelect: (folder: string) => void; service: GitService; filter: ChangeFilter; onChanged: () => Promise<void>; disabled: boolean }) {
+  const selected = groups.find((group) => group.path === selectedFolder)
+  return <HStack spacing={10} alignment="top">
+    <VStack spacing={2} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      <Text font="caption" foregroundStyle="secondaryLabel">FOLDERS</Text>
+      {groups.map((group) => <Button key={group.path} title={`${group.path}  ${group.files.length}`} buttonStyle={group.path === selectedFolder ? "borderedProminent" : "borderless"} action={() => onSelect(group.path)} />)}
+    </VStack>
+    <VStack spacing={2} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      <Text font="caption" foregroundStyle="secondaryLabel">{selectedFolder}</Text>
+      {(selected?.files || []).map((change) => <FileRow key={change.filepath} gitService={service} change={change} comparison={filter} onChanged={onChanged} disabled={disabled} />)}
+    </VStack>
+  </HStack>
+}
+function EmptyChangesView({ loading }: { loading: boolean }) { return <Section><VStack spacing={8} alignment="center">{loading ? <ProgressView /> : <Image systemName="checkmark.circle" foregroundStyle="green" />}<Text font="headline">{loading ? "Refreshing Changes" : "Working Tree Clean"}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{loading ? "Checking the repository status…" : "There are no staged or unstaged changes."}</Text></VStack></Section> }
 
-export function SourceControlChangesView({
-  gitService: propGitService,
-  projectPath,
-}: SourceControlChangesViewProps) {
+export function SourceControlChangesView({ gitService: propGitService, projectPath }: SourceControlChangesViewProps) {
   const [service] = useState<GitService>(() => propGitService || new GitService())
-  const [loading, setLoading] = useState<boolean>(true)
+  const [loading, setLoading] = useState(true)
   const [status, setStatus] = useState<GitRepositoryStatus | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [hasCommit, setHasCommit] = useState<boolean | null>(null)
+  const [hasRemote, setHasRemote] = useState<boolean | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [activeOperation, setActiveOperation] = useState<string | null>(null)
-  const [commitMessage, setCommitMessage] = useState<string>("")
-  const repositoryDisplayName = getRepositoryDisplayName(projectPath)
+  const [commitMessage, setCommitMessage] = useState("")
+  const [localCommitCreated, setLocalCommitCreated] = useState(false)
+  const [filter, setFilter] = useState<ChangeFilter>("staged")
+  const [selectedFolder, setSelectedFolder] = useState("ROOT")
+  const dismiss = Navigation.useDismiss()
 
   const loadStatus = async () => {
-    setLoading(true)
-    setErrorMessage(null)
+    setLoading(true); setErrorMessage(null)
     try {
-      if (projectPath) {
-        await service.openRepository(projectPath)
-      }
-      const repoStatus = await service.getStatus()
-      setStatus(repoStatus)
-      try {
-        const history = await service.getHistory(1)
-        setHasCommit(history.length > 0)
-      } catch (historyError) {
-        console.error("[Changes] history check FAILED", historyError)
-        setHasCommit(null)
-      }
-    } catch (err) {
-      console.error("[Changes] load FAILED", err)
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-      setHasCommit(null)
-    } finally {
-      setLoading(false)
-    }
+      if (projectPath) await service.openRepository(projectPath)
+      const nextStatus = await service.getStatus(); setStatus(nextStatus)
+      const history = await service.getHistory(1); setHasCommit(history.length > 0)
+      setHasRemote((await service.listRemotes()).length > 0)
+    } catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)) } finally { setLoading(false) }
   }
-
-  const handleFileOperation = async (
-    operation: "stage" | "unstage",
-    filepath: string,
-  ) => {
-    if (activeOperation !== null) return
-
-    const operationKey = `${operation}:${filepath}`
-
-    setActiveOperation(operationKey)
-    setErrorMessage(null)
-    try {
-      if (operation === "stage") {
-        await service.stageFile(filepath)
-      } else {
-        await service.unstageFile(filepath)
-      }
-      await loadStatus()
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActiveOperation(null)
-    }
+  const operateAll = async (operation: "stageAll" | "unstageAll") => {
+    if (activeOperation) return; setActiveOperation(operation); setErrorMessage(null)
+    try { operation === "stageAll" ? await service.stageAll() : await service.unstageAll(); await loadStatus() } catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)) } finally { setActiveOperation(null) }
   }
-
-  const handleAllOperation = async (operation: "stageAll" | "unstageAll") => {
-    if (activeOperation !== null) return
-
-    setActiveOperation(operation)
-    setErrorMessage(null)
-    try {
-      if (operation === "stageAll") {
-        await service.stageAll()
-      } else {
-        await service.unstageAll()
-      }
-      await loadStatus()
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActiveOperation(null)
-    }
-  }
-
   const handleCommit = async () => {
-    const trimmedMessage = commitMessage.trim()
-    if (!trimmedMessage || activeOperation !== null || !status || status.stagedChanges.length === 0) {
-      return
-    }
-
-    setActiveOperation("commit")
-    setErrorMessage(null)
-    try {
-      const result = await service.commit(trimmedMessage)
-      setCommitMessage("")
-      await loadStatus()
-      await Dialog.alert({
-        title: "Committed",
-        message: result.shortOid,
-      })
-    } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActiveOperation(null)
-    }
+    const message = commitMessage.trim(); if (!message || !status || !status.stagedChanges.length || activeOperation) return
+    setActiveOperation("commit"); setErrorMessage(null)
+    try { const result = await service.commit(message); setCommitMessage(""); setLocalCommitCreated(true); await loadStatus(); await Dialog.alert({ title: "Committed", message: result.shortOid }) } catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)) } finally { setActiveOperation(null) }
   }
+  const syncToGitHub = async () => {
+    if (activeOperation) return; setActiveOperation("sync"); setErrorMessage(null)
+    try {
+      const remotes = await service.listRemotes(); const remote = remotes.find((item) => item.name === "origin") || remotes[0]
+      if (!remote) { await Navigation.present(<SourceControlRemoteView gitService={service} onChanged={loadStatus} />); return }
+      await service.fetchRemote(remote.name); const branch = await service.getCurrentBranch(); if (!branch) throw new Error("A local branch is required before syncing.")
+      const sync = await service.getAheadBehind(remote.name, branch)
+      if (sync.diverged || sync.behind > 0) { setErrorMessage(sync.diverged ? "Local and GitHub changes have diverged." : "GitHub has newer changes. Pull them before syncing."); return }
+      if (sync.ahead > 0) await service.pushRemote(remote.name, sync.remoteBranch)
+      await loadStatus(); await Dialog.alert({ title: "Synced with GitHub", message: "Your local commit is now on GitHub." })
+    } catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)) } finally { setActiveOperation(null) }
+  }
+  useEffect(() => { loadStatus().catch(console.error) }, [projectPath])
 
-  useEffect(() => {
-    loadStatus().catch(console.error)
-  }, [projectPath])
+  const staged = status?.stagedChanges || []; const unstaged = status?.unstagedChanges || []
+  const visible = filter === "staged" ? staged : unstaged; const groups = folderGroups(visible); const busy = activeOperation !== null
+  useEffect(() => { if (!groups.some((group) => group.path === selectedFolder && group.files.length)) setSelectedFolder(groups.find((group) => group.files.length)?.path || "ROOT") }, [filter, staged.length, unstaged.length, selectedFolder])
+  useEffect(() => { if (!staged.length && unstaged.length) setFilter("unstaged"); else if (!unstaged.length && staged.length) setFilter("staged") }, [staged.length, unstaged.length])
 
-  const stagedCount = status?.stagedChanges.length ?? 0
-  const unstagedCount = status?.unstagedChanges.length ?? 0
-
-  return (
-    <List
-      navigationTitle="Changes"
-      toolbar={{
-        topBarTrailing: (
-          <HStack spacing={12}>
-            <Menu title="More" systemImage="ellipsis.circle">
-              <Button
-                title="Remote"
-                systemImage="arrow.triangle.2.circlepath"
-                action={async () => {
-                  await Navigation.present(
-                    <SourceControlRemoteView
-                      gitService={service}
-                      onChanged={loadStatus}
-                    />
-                  )
-                }}
-              />
-              <Button
-                title="Snapshots"
-                systemImage="archivebox"
-                action={async () => {
-                  await Navigation.present(
-                    <SourceControlSnapshotsView
-                      gitService={service}
-                      onRestored={loadStatus}
-                    />
-                  )
-                }}
-              />
-            </Menu>
-            <Button
-              title="History"
-              systemImage="clock.arrow.circlepath"
-              buttonStyle="borderless"
-              action={async () => {
-                await Navigation.present(
-                  <SourceControlHistoryView
-                    gitService={service}
-                    projectPath={projectPath || `${FileManager.scriptsDirectory}/Source Control Stage Test`}
-                  />
-                )
-              }}
-            />
-            <Button
-              title="Refresh"
-              systemImage="arrow.clockwise"
-              buttonStyle="borderless"
-              disabled={loading}
-              action={loadStatus}
-            />
-          </HStack>
-        ),
-      }}
-    >
-      <Section>
-        <VStack spacing={4} alignment="leading">
-          <Text font="headline">{repositoryDisplayName}</Text>
-          <Text font="caption" foregroundStyle="secondaryLabel">
-            {loading ? "Refreshing repository status…" : `${stagedCount} staged · ${unstagedCount} unstaged`}
-          </Text>
-        </VStack>
-      </Section>
-
-      {hasCommit === false ? (
-        <Section>
-          <VStack spacing={6} alignment="leading">
-            <Text font="headline">Repository Initialized</Text>
-            <Text font="footnote" foregroundStyle="secondaryLabel">
-              This repository has no commits yet. Stage the files you want to include, then create your Initial Commit.
-            </Text>
-            {status && status.stagedChanges.length > 0 ? (
-              <>
-                <Text font="subheadline">
-                  {status.unstagedChanges.length > 0 ? "Some files are staged." : "Ready for Initial Commit"}
-                </Text>
-                {status.unstagedChanges.length === 0 ? (
-                  <Text font="footnote" foregroundStyle="secondaryLabel">
-                    Enter a message in the Commit section below to create your Initial Commit.
-                  </Text>
-                ) : null}
-              </>
-            ) : null}
-            {status && status.unstagedChanges.length > 0 ? (
-              <Button
-                title={
-                  activeOperation === "stageAll"
-                    ? "Staging…"
-                    : status.stagedChanges.length > 0
-                      ? "Stage Remaining"
-                      : "Stage All"
-                }
-                buttonStyle="borderless"
-                disabled={activeOperation !== null}
-                action={() => handleAllOperation("stageAll")}
-              />
-            ) : null}
-          </VStack>
-        </Section>
-      ) : null}
-
-      {errorMessage ? (
-        <Section>
-          <VStack spacing={4} alignment="leading">
-            <Text font="headline" foregroundStyle="red">Unable to Load Changes</Text>
-            <Text font="footnote" foregroundStyle="secondaryLabel">{errorMessage}</Text>
-          </VStack>
-        </Section>
-      ) : null}
-
-      {status?.isClean ? <EmptyChangesView loading={loading} /> : null}
-
-      {status && !status.isClean ? (
-        <>
-          {status.stagedChanges.length > 0 ? (
-            <>
-              <Section
-                header={
-                  <HStack spacing={8} alignment="center">
-                    <Text>STAGED CHANGES · {status.stagedChanges.length}</Text>
-                    <Spacer />
-                    <Button
-                      title={activeOperation === "unstageAll" ? "Unstaging…" : "Unstage All"}
-                      buttonStyle="borderless"
-                      disabled={activeOperation !== null}
-                      action={() => handleAllOperation("unstageAll")}
-                    />
-                  </HStack>
-                }
-              >
-                {status.stagedChanges.map((change) => (
-                  <ChangeItemRow
-                    key={change.filepath}
-                    change={change}
-                    gitService={service}
-                    comparison="staged"
-                    onStatusChanged={loadStatus}
-                    actionTitle="Unstage"
-                    actionImage="minus.circle"
-                    action={() => handleFileOperation("unstage", change.filepath)}
-                    isOperationActive={activeOperation !== null}
-                  />
-                ))}
-              </Section>
-
-              <Section>
-                <VStack spacing={10} alignment="leading">
-                  <TextField
-                    title="Commit message"
-                    prompt={hasCommit === false ? "Initial commit" : "Commit message"}
-                    value={commitMessage}
-                    onChanged={setCommitMessage}
-                  />
-                  <Button
-                    title={activeOperation === "commit" ? "Committing…" : "Commit"}
-                    buttonStyle="borderedProminent"
-                    disabled={
-                      activeOperation !== null ||
-                      commitMessage.trim().length === 0 ||
-                      status.stagedChanges.length === 0
-                    }
-                    action={handleCommit}
-                  />
-                </VStack>
-              </Section>
-            </>
-          ) : null}
-
-          {status.unstagedChanges.length > 0 ? (
-            <Section
-              header={
-                <HStack spacing={8} alignment="center">
-                  <Text>CHANGES · {status.unstagedChanges.length}</Text>
-                  <Spacer />
-                  <Button
-                    title={activeOperation === "stageAll" ? "Staging…" : "Stage All"}
-                    buttonStyle="borderless"
-                    disabled={activeOperation !== null}
-                    action={() => handleAllOperation("stageAll")}
-                  />
-                </HStack>
-              }
-            >
-              {status.unstagedChanges.map((change) => (
-                <ChangeItemRow
-                  key={change.filepath}
-                  change={change}
-                  gitService={service}
-                  comparison="unstaged"
-                  onStatusChanged={loadStatus}
-                  actionTitle="Stage"
-                  actionImage="plus.circle"
-                  action={() => handleFileOperation("stage", change.filepath)}
-                  isOperationActive={activeOperation !== null}
-                />
-              ))}
-            </Section>
-          ) : null}
-        </>
-      ) : null}
-    </List>
-  )
+  return <List navigationTitle="Changes" toolbar={{ topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => dismiss()} />, topBarTrailing: <HStack spacing={10}><Menu title="More" systemImage="ellipsis.circle"><Button title="Remote" action={async () => { await Navigation.present(<SourceControlRemoteView gitService={service} onChanged={loadStatus} />); await loadStatus() }} /><Button title="Snapshots" action={async () => { await Navigation.present(<SourceControlSnapshotsView gitService={service} onRestored={loadStatus} />) }} /></Menu><Button title="History" systemImage="clock.arrow.circlepath" action={async () => { await Navigation.present(<SourceControlHistoryView gitService={service} projectPath={projectPath || ""} />) }} /><Button title="Refresh" systemImage="arrow.clockwise" disabled={loading} action={loadStatus} /></HStack> }}>
+    <Section><VStack spacing={4} alignment="leading"><Text font="headline">{getRepositoryDisplayName(projectPath)}</Text><Text font="footnote" foregroundStyle="secondaryLabel">Local Changes · {staged.length + unstaged.length} files</Text></VStack></Section>
+    {hasCommit === false ? <Section><VStack spacing={5} alignment="leading"><Text font="headline">Repository Initialized</Text><Text font="subheadline">{staged.length ? "Ready for Initial Commit" : "Stage files to begin"}</Text><Text font="footnote" foregroundStyle="secondaryLabel">Stage the files you want, then create the first commit.</Text>{unstaged.length ? <Button title={busy ? "Staging…" : staged.length ? "Stage Remaining" : "Stage All"} disabled={busy} action={() => operateAll("stageAll")} /> : null}</VStack></Section> : null}
+    {errorMessage ? <Section><Text foregroundStyle="red">{errorMessage}</Text></Section> : null}
+    {status?.isClean && !localCommitCreated ? <EmptyChangesView loading={loading} /> : null}
+    {status?.isClean && localCommitCreated ? <Section><VStack spacing={6} alignment="leading"><Text font="headline">Local Commit Created</Text>{hasRemote ? <><Text font="footnote" foregroundStyle="secondaryLabel">Ready to Sync</Text><Button title={busy ? "Syncing…" : "Sync to GitHub"} disabled={busy} action={syncToGitHub} /></> : <><Text font="footnote" foregroundStyle="secondaryLabel">Not Connected to GitHub</Text><Button title="Set Up Remote" disabled={busy} action={async () => { await Navigation.present(<SourceControlRemoteView gitService={service} onChanged={loadStatus} />); await loadStatus() }} /></>}</VStack></Section> : null}
+    {staged.length ? <Section><VStack spacing={8} alignment="leading"><Text font="footnote" foregroundStyle="secondaryLabel">LOCAL COMMIT</Text><Text font="caption" foregroundStyle="secondaryLabel">Save the current staged changes to local Git history.</Text><Button title={commitMessage.trim() || (hasCommit === false ? "Initial commit" : "Not Set")} systemImage="chevron.right" disabled={busy} action={async () => { const message = await Dialog.prompt({ title: hasCommit === false ? "Initial Commit" : "Commit Message", defaultValue: commitMessage, placeholder: hasCommit === false ? "Initial commit" : "Commit message", cancelLabel: "Cancel", confirmLabel: "Save" }); if (message !== null) setCommitMessage(message) }} /><Button title={busy ? "Committing…" : "Commit Locally"} disabled={!staged.length || !commitMessage.trim() || busy} action={handleCommit} /></VStack></Section> : null}
+    {status && (staged.length || unstaged.length) ? <Section header={<HStack spacing={8}><Text>FILES</Text><Spacer /><Button title={`Staged ${staged.length}`} buttonStyle={filter === "staged" ? "borderedProminent" : "borderless"} disabled={!staged.length || busy} action={() => setFilter("staged")} /><Button title={`Changes ${unstaged.length}`} buttonStyle={filter === "unstaged" ? "borderedProminent" : "borderless"} disabled={!unstaged.length || busy} action={() => setFilter("unstaged")} /></HStack>}><FileBrowser groups={groups} selectedFolder={selectedFolder} onSelect={setSelectedFolder} service={service} filter={filter} onChanged={loadStatus} disabled={busy} /><HStack spacing={10}>{filter === "staged" ? <Button title="Unstage All" disabled={busy || !staged.length} action={() => operateAll("unstageAll")} /> : <Button title="Stage All" disabled={busy || !unstaged.length} action={() => operateAll("stageAll")} />}</HStack></Section> : null}
+  </List>
 }
-
 export default SourceControlChangesView

@@ -974,7 +974,7 @@ export class GitRepository {
     return writeDirectory(root)
   }
 
-  /** 获取最近提交历史，按最新优先返回。 */
+  /** 仅读取当前本地 HEAD 的最近提交历史，按最新优先返回。 */
   async getHistory(limit = 50): Promise<GitCommitInfo[]> {
     try {
       const safeLimit = Math.max(1, Math.min(limit, 200))
@@ -1001,19 +1001,45 @@ export class GitRepository {
         throw err
       }
 
-      return logs.map((entry) => ({
-        oid: entry.oid,
-        shortOid: entry.oid.slice(0, 7),
-        message: entry.commit.message.trim(),
-        authorName: entry.commit.author.name,
-        authorEmail: entry.commit.author.email,
-        timestamp: entry.commit.author.timestamp,
-        parentOids: entry.commit.parent || [],
-      }))
+      return this.toHistoryInfo(logs)
     } catch (error) {
       const formatted = GitSafety.formatErrorMessage(error, "获取历史提交记录")
       throw new Error(formatted)
     }
+  }
+
+  /** 仅读取已 Fetch 的 remote-tracking ref，不访问网络或修改仓库状态。 */
+  async getRemoteHistory(remoteName = "origin", branchName?: string, limit = 50): Promise<GitCommitInfo[]> {
+    const remote = validateRemoteName(remoteName)
+    const branch = branchName || await this.getCurrentBranch()
+    if (!branch) throw new GitSafetyError("当前不在本地分支上，无法读取 GitHub 历史", "REMOTE_HISTORY_NO_BRANCH")
+    const remoteBranch = (await this.listRemoteBranches(remote)).find((item) => item.name === branch)
+    if (!remoteBranch) throw new GitSafetyError(`尚未获取远端分支: "${remote}/${branch}"`, "REMOTE_BRANCH_NOT_FOUND", { remote, branch })
+    try {
+      const logs = await this.git.log({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: remoteBranch.ref, depth: Math.max(1, Math.min(limit, 200)) })
+      return this.toHistoryInfo(logs)
+    } catch (error) {
+      throw new Error(GitSafety.formatErrorMessage(error, "读取 GitHub 历史"))
+    }
+  }
+
+  private toHistoryInfo(logs: Array<{
+    oid: string
+    commit: {
+      message: string
+      parent: string[]
+      author: { name: string; email: string; timestamp: number; timezoneOffset: number }
+    }
+  }>): GitCommitInfo[] {
+    return logs.map((entry) => ({
+      oid: entry.oid,
+      shortOid: entry.oid.slice(0, 7),
+      message: entry.commit.message.trim(),
+      authorName: entry.commit.author.name,
+      authorEmail: entry.commit.author.email,
+      timestamp: entry.commit.author.timestamp,
+      parentOids: entry.commit.parent || [],
+    }))
   }
 
   private async hasUnbornHead(): Promise<boolean> {

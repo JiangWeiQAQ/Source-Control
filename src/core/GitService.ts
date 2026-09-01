@@ -502,6 +502,11 @@ export class GitService {
     return this.ensureRepository().getHistory(limit)
   }
 
+  /** 仅读取已 Fetch 的 remote-tracking ref 历史，不执行网络访问。 */
+  async getRemoteHistory(remoteName?: string, branchName?: string, limit?: number): Promise<GitCommitInfo[]> {
+    return this.ensureRepository().getRemoteHistory(remoteName, branchName, limit)
+  }
+
   /** 获取单个 Commit 的元数据和文件变更。 */
   async getCommitDetail(oid: string): Promise<GitCommitDetail> {
     return this.ensureRepository().getCommitDetail(oid)

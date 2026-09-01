@@ -19,6 +19,7 @@ export interface SourceControlCommitDetailViewProps {
   oid: string
   shortOid?: string
   onCommitReverted?: () => Promise<void>
+  readOnly?: boolean
 }
 
 function formatCommitTime(timestamp: number): string {
@@ -77,6 +78,7 @@ export function SourceControlCommitDetailView({
   oid,
   shortOid,
   onCommitReverted,
+  readOnly = false,
 }: SourceControlCommitDetailViewProps) {
   const dismiss = Navigation.useDismiss()
   const [detail, setDetail] = useState<GitCommitDetail | null>(null)
@@ -231,7 +233,7 @@ export function SourceControlCommitDetailView({
             </VStack>
           </Section>
 
-          {detail.parents.length === 1 ? (
+          {!readOnly && detail.parents.length === 1 ? (
             <Section header={<Text font="footnote">REVERT</Text>}>
               <VStack spacing={6} alignment="leading">
                 <Text font="footnote" foregroundStyle="secondaryLabel">

@@ -76,11 +76,13 @@ function ProjectRow({
   openingPath,
   onOpen,
   onRemove,
+  removeTitle,
 }: {
   project: ManagedProject
   openingPath: string | null
   onOpen: (project: ManagedProject) => void
   onRemove: (project: ManagedProject) => void
+  removeTitle: string
 }) {
   const [exists, setExists] = useState<boolean | null>(null)
 
@@ -105,7 +107,9 @@ function ProjectRow({
           {isOpening ? <ProgressView /> : <Image systemName="chevron.right" foregroundStyle="tertiaryLabel" />}
         </HStack>
       </Button>
-      <Button title="Remove" role="destructive" disabled={openingPath !== null} action={() => onRemove(project)} />
+      <Menu title="More" systemImage="ellipsis.circle">
+        <Button title={removeTitle} role="destructive" disabled={openingPath !== null} action={() => onRemove(project)} />
+      </Menu>
     </HStack>
   )
 }
@@ -255,13 +259,12 @@ export function SourceControlProjectPickerView() {
       navigationTitle={t("sourceControl")}
       navigationSubtitle={t("beta")}
       toolbar={{
+        topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => Navigation.useDismiss()()} />,
         topBarTrailing: (
           <HStack spacing={8}>
-            <Menu title={t("settings")} systemImage="gearshape">
-              <Button title={t("settings")} action={async () => {
-                await Navigation.present(<SourceControlSettingsView onLanguageChanged={refreshLanguage} />)
-              }} />
-            </Menu>
+            <Button title={t("settings")} systemImage="gearshape" buttonStyle="borderless" action={async () => {
+              await Navigation.present(<SourceControlSettingsView onLanguageChanged={refreshLanguage} />)
+            }} />
             <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || openingPath !== null} action={loadProjects} />
           </HStack>
         ),
@@ -285,7 +288,7 @@ export function SourceControlProjectPickerView() {
       {!loading && projects.length > 0 ? (
         <Section header={<Text>{t("myProjects")}</Text>}>
           {projects.map((project) => (
-            <ProjectRow key={project.path} project={project} openingPath={openingPath} onOpen={openProject} onRemove={removeProject} />
+            <ProjectRow key={project.path} project={project} openingPath={openingPath} onOpen={openProject} onRemove={removeProject} removeTitle={t("remove")} />
           ))}
           <Button title={t("addProject")} systemImage="plus" action={async () => {
             await Navigation.present(<AddProjectView managedProjects={projects} onAdded={addProject} />)

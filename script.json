@@ -1,0 +1,8 @@
+{
+  "name": "Source Control",
+  "icon": "arrow.triangle.branch",
+  "color": "indigo",
+  "version": "1.0.0",
+  "runInApp": true,
+  "description": "Git 源码管理器，支持变更查看、暂存、提交快照与历史回溯"
+}

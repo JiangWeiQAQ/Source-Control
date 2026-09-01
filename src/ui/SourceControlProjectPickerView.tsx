@@ -3,6 +3,7 @@ import {
   HStack,
   Image,
   List,
+  Menu,
   Navigation,
   Path,
   ProgressView,
@@ -15,6 +16,8 @@ import {
 } from "scripting"
 import { GitService } from "../core/GitService"
 import { SourceControlChangesView } from "./SourceControlChangesView"
+import { SourceControlSettingsView } from "./SourceControlSettingsView"
+import { useTranslator } from "./useLocalization"
 
 interface ManagedProject {
   name: string
@@ -177,6 +180,7 @@ function AddProjectView({
 }
 
 export function SourceControlProjectPickerView() {
+  const { t, refreshLanguage } = useTranslator()
   const [projects, setProjects] = useState<ManagedProject[]>([])
   const [loading, setLoading] = useState(true)
   const [openingPath, setOpeningPath] = useState<string | null>(null)
@@ -248,10 +252,19 @@ export function SourceControlProjectPickerView() {
 
   return (
     <List
-      navigationTitle="Source Control"
-      navigationSubtitle="Beta"
+      navigationTitle={t("sourceControl")}
+      navigationSubtitle={t("beta")}
       toolbar={{
-        topBarTrailing: <Button title="Refresh" systemImage="arrow.clockwise" disabled={loading || openingPath !== null} action={loadProjects} />,
+        topBarTrailing: (
+          <HStack spacing={8}>
+            <Menu title={t("settings")} systemImage="gearshape">
+              <Button title={t("settings")} action={async () => {
+                await Navigation.present(<SourceControlSettingsView onLanguageChanged={refreshLanguage} />)
+              }} />
+            </Menu>
+            <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || openingPath !== null} action={loadProjects} />
+          </HStack>
+        ),
       }}
     >
       {errorMessage ? <Section><Text foregroundStyle="red">{errorMessage}</Text></Section> : null}
@@ -260,9 +273,9 @@ export function SourceControlProjectPickerView() {
         <Section>
           <VStack spacing={8} alignment="center">
             <Image systemName="folder" font="largeTitle" foregroundStyle="tertiaryLabel" />
-            <Text font="headline">No Projects</Text>
-            <Text font="footnote" foregroundStyle="secondaryLabel">Add a Scripting project to start tracking changes.</Text>
-            <Button title="Add Project" systemImage="plus" buttonStyle="borderedProminent" action={async () => {
+            <Text font="headline">{t("noProjects")}</Text>
+            <Text font="footnote" foregroundStyle="secondaryLabel">{t("addProjectHint")}</Text>
+            <Button title={t("addProject")} systemImage="plus" buttonStyle="borderedProminent" action={async () => {
               await Navigation.present(<AddProjectView managedProjects={projects} onAdded={addProject} />)
               await loadProjects()
             }} />
@@ -270,11 +283,11 @@ export function SourceControlProjectPickerView() {
         </Section>
       ) : null}
       {!loading && projects.length > 0 ? (
-        <Section header={<Text>MY PROJECTS</Text>}>
+        <Section header={<Text>{t("myProjects")}</Text>}>
           {projects.map((project) => (
             <ProjectRow key={project.path} project={project} openingPath={openingPath} onOpen={openProject} onRemove={removeProject} />
           ))}
-          <Button title="Add Project" systemImage="plus" action={async () => {
+          <Button title={t("addProject")} systemImage="plus" action={async () => {
             await Navigation.present(<AddProjectView managedProjects={projects} onAdded={addProject} />)
             await loadProjects()
           }} />

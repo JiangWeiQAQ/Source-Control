@@ -13,6 +13,7 @@ import {
 } from "scripting"
 import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo, GitRepositoryStatus } from "../core/types"
 import { GitService } from "../core/GitService"
+import { useTranslator } from "./useLocalization"
 
 export interface SourceControlRemoteViewProps {
   gitService: GitService
@@ -41,6 +42,7 @@ function syncStatusText(sync: GitAheadBehind | null): string {
 }
 
 export function SourceControlRemoteView({ gitService, onChanged }: SourceControlRemoteViewProps) {
+  const { t } = useTranslator()
   const dismiss = Navigation.useDismiss()
   const [remotes, setRemotes] = useState<GitRemoteInfo[]>([])
   const [selectedRemoteName, setSelectedRemoteName] = useState<string | null>(null)
@@ -252,7 +254,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
         topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => dismiss()} />,
         topBarTrailing: (
           <Button
-            title="Refresh"
+            title={t("refresh")}
             systemImage="arrow.clockwise"
             buttonStyle="borderless"
             disabled={loading || isBusy}
@@ -275,16 +277,16 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
       {!loading && remotes.length === 0 ? (
         <Section>
           <VStack spacing={8} alignment="leading">
-            <Text font="headline">No Remote</Text>
-            <Text font="footnote" foregroundStyle="secondaryLabel">This repository is not connected to a remote repository.</Text>
-            <Button title="Add Remote" systemImage="plus" buttonStyle="borderedProminent" disabled={isBusy} action={addRemote} />
+            <Text font="headline">{t("noRemote")}</Text>
+            <Text font="footnote" foregroundStyle="secondaryLabel">{t("noRemoteHint")}</Text>
+            <Button title={t("addRemote")} systemImage="plus" buttonStyle="borderedProminent" disabled={isBusy} action={addRemote} />
           </VStack>
         </Section>
       ) : null}
 
       {!loading && selectedRemote ? (
         <>
-          <Section header={<Text>REMOTE</Text>}>
+          <Section header={<Text>{t("remote")}</Text>}>
             <VStack spacing={6} alignment="leading">
               <Text font="headline">Local Branch</Text>
               <Text font="body" foregroundStyle="secondaryLabel">{localBranch ?? "Detached HEAD"}</Text>
@@ -295,14 +297,14 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
           </Section>
 
           {remotes.length > 1 ? (
-            <Section header={<Text>REMOTES</Text>}>
+            <Section header={<Text>{t("remotes")}</Text>}>
               {remotes.map((remote) => (
                 <Button key={remote.name} title={remote.name} disabled={isBusy || remote.name === selectedRemote.name} action={() => chooseRemote(remote.name)} />
               ))}
             </Section>
           ) : null}
 
-          <Section header={<Text>SYNC STATUS</Text>}>
+          <Section header={<Text>{t("syncStatus")}</Text>}>
             <VStack spacing={6} alignment="leading">
               <Text font="headline" foregroundStyle={sync?.diverged ? "orange" : undefined}>{syncStatusText(sync)}</Text>
               {sync ? <Text font="footnote" foregroundStyle="secondaryLabel">Local {sync.ahead} · Remote {sync.behind}</Text> : <Text font="footnote" foregroundStyle="secondaryLabel">Fetch this remote to load a matching remote branch.</Text>}
@@ -310,12 +312,12 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
             </VStack>
           </Section>
 
-          <Section header={<Text>REMOTE BRANCH</Text>}>
+          <Section header={<Text>{t("remoteBranch")}</Text>}>
             {matchingRemoteBranch ? <Text font="body">{selectedRemote.name}/{matchingRemoteBranch.name}</Text> : <Text font="body" foregroundStyle="secondaryLabel">Remote Branch Unavailable</Text>}
           </Section>
 
           {isHttpsRemote(selectedRemote.url) ? (
-            <Section header={<Text>AUTHENTICATION</Text>}>
+            <Section header={<Text>{t("authentication")}</Text>}>
               <VStack spacing={7} alignment="leading">
                 <Text font="body">{hasCredential ? "Configured" : "Not Configured"}</Text>
                 <HStack spacing={10}>
@@ -326,7 +328,7 @@ export function SourceControlRemoteView({ gitService, onChanged }: SourceControl
             </Section>
           ) : null}
 
-          <Section header={<Text>ACTIONS</Text>} footer={!repositoryStatus?.isClean && sync && sync.behind > 0 ? <Text>Commit or discard local changes before pulling.</Text> : undefined}>
+          <Section header={<Text>{t("actions")}</Text>} footer={!repositoryStatus?.isClean && sync && sync.behind > 0 ? <Text>Commit or discard local changes before pulling.</Text> : undefined}>
             <HStack spacing={10}>
               <Button title={activeOperation === "fetch" ? "Fetching…" : "Fetch"} disabled={isBusy} action={fetchRemote} />
               <Button title={activeOperation === "push" ? "Pushing…" : "Push"} disabled={isBusy || !canPush} action={pushRemote} />

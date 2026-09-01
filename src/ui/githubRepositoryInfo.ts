@@ -1,4 +1,5 @@
 import { GitRemoteCredential } from "../core/types"
+import { fetch } from "scripting"
 
 export interface GithubRepositoryInfo {
   owner: string
@@ -20,7 +21,7 @@ export async function getGithubRepositoryInfo(url: string, credential: GitRemote
   try {
     const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`, { headers })
     if (!response.ok) return { ...repository, private: null, visibility: null }
-    const data = JSON.parse(await response.text()) as { private?: boolean; visibility?: string }
+    const data = (await response.json()) as { private?: boolean; visibility?: string }
     return { ...repository, private: data.private === true, visibility: typeof data.visibility === "string" ? data.visibility : null }
   } catch {
     return { ...repository, private: null, visibility: null }

@@ -2,30 +2,49 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>导入 Source Control 到 Scripting</title>
   <style>
+    :root {
+      --bg: #000000;
+      --card-bg: #1c1c1e;
+      --text: #ffffff;
+      --subtext: #8e8e93;
+      --tint: #5856d6;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f2f2f7;
+        --card-bg: #ffffff;
+        --text: #000000;
+        --subtext: #8e8e93;
+        --tint: #5856d6;
+      }
+    }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: #000;
-      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", sans-serif;
+      background-color: var(--bg);
+      color: var(--text);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      min-height: 90vh;
+      min-height: 100vh;
       margin: 0;
       padding: 20px;
       box-sizing: border-box;
-      text-align: center;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .card {
-      background: #1c1c1e;
-      padding: 30px 24px;
+      background-color: var(--card-bg);
       border-radius: 20px;
-      max-width: 400px;
+      padding: 32px 24px;
+      max-width: 360px;
       width: 100%;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+      text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      box-sizing: border-box;
     }
     .icon {
       font-size: 54px;
@@ -36,14 +55,14 @@
       margin: 0 0 8px;
     }
     p {
-      color: #8e8e93;
+      color: var(--subtext);
       font-size: 14px;
       line-height: 1.5;
       margin: 0 0 24px;
     }
     .btn {
       display: block;
-      background: #5856D6;
+      background: var(--tint);
       color: #fff;
       text-decoration: none;
       font-weight: 600;
@@ -68,7 +87,7 @@
     <h1>导入 Source Control 到 Scripting</h1>
     <p>正在尝试自动呼起 Scripting 下载安装并导入项目...</p>
     <a id="importBtn" class="btn" href="scripting://import_scripts?urls=%5B%22https%3A%2F%2Fgithub.com%2FJiangWeiQAQ%2FSource-Control%2Farchive%2Frefs%2Fheads%2Fmaster.zip%22%5D">点击直接呼起导入</a>
-    <div class="manual">若未自动跳转，请点击上方紫色按钮</div>
+    <div class="manual">若未自动跳转，请点击上方按钮</div>
   </div>
 
   <script>

@@ -26,7 +26,7 @@ export function alignHistory(local: GitCommitInfo[], remote: GitCommitInfo[]): C
 
 function CommitCell({ commit, status }: { commit: GitCommitInfo | null; status: "local" | "remote" | "shared" }) {
   if (!commit) return <Text font="caption" foregroundStyle="tertiaryLabel">—</Text>
-  return <VStack spacing={3} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}><Text font="subheadline" lineLimit={2}>{commit.message}</Text><Text font="caption2" foregroundStyle="secondaryLabel">{formatHistoryTime(commit.timestamp)} · {commit.shortOid}</Text>{status !== "shared" ? <Text font="caption2" foregroundStyle="orange">{status === "local" ? "仅本地" : "仅云端"}</Text> : null}</VStack>
+  return <VStack spacing={3} alignment="leading" frame={{ maxWidth: "infinity", minHeight: 64, alignment: "leading" }}><Text font="subheadline" lineLimit={2}>{commit.message}</Text><Text font="caption2" foregroundStyle="secondaryLabel">{formatHistoryTime(commit.timestamp)} · {commit.shortOid}</Text>{status !== "shared" ? <Text font="caption2" foregroundStyle={status === "local" ? "blue" : "orange"}>{status === "local" ? "仅本地" : "仅云端"}</Text> : null}</VStack>
 }
 
 export function SourceControlHistoryCompareView({ gitService, language = "en" }: SourceControlHistoryCompareViewProps) {
@@ -50,7 +50,7 @@ export function SourceControlHistoryCompareView({ gitService, language = "en" }:
   const diverged = rows.some((row) => row.local && row.remote && row.local.oid !== row.remote.oid)
 
   return <List navigationTitle="版本对照" toolbar={{ topBarLeading: <Button title={t("close")} action={() => dismiss()} />, topBarTrailing: <Button title={fetching ? t("fetching") : t("refresh")} systemImage="arrow.clockwise" disabled={loading || fetching || state === "noRemote"} action={refresh} /> }}>
-    <Section><HStack spacing={8}><Text font="headline" frame={{ maxWidth: "infinity", alignment: "leading" }}>本地版本</Text><Divider /><Text font="headline" frame={{ maxWidth: "infinity", alignment: "leading" }}>GitHub 版本</Text></HStack>{target ? <Text font="caption" foregroundStyle="secondaryLabel">{target.remote} · {target.branch}</Text> : null}</Section>
+    <Section><Text font="footnote" foregroundStyle="secondaryLabel">左侧为本地版本，右侧为最近一次 Fetch 后的 GitHub 版本。</Text><HStack spacing={8}><Text font="headline" frame={{ maxWidth: "infinity", alignment: "leading" }}>本地版本</Text><Divider /><Text font="headline" frame={{ maxWidth: "infinity", alignment: "leading" }}>GitHub 版本</Text></HStack>{target ? <Text font="caption" foregroundStyle="secondaryLabel">{target.remote} · {target.branch}</Text> : null}</Section>
     {diverged ? <Section><Text font="footnote" foregroundStyle="orange">本地和 GitHub 历史已分叉</Text></Section> : null}
     {loading ? <Section><ProgressView /></Section> : null}
     {state === "noRemote" ? <Section><VStack spacing={8} alignment="leading"><Text font="headline">尚未连接 GitHub</Text><Text font="footnote" foregroundStyle="secondaryLabel">无法进行本地与云端版本对照。</Text></VStack></Section> : null}

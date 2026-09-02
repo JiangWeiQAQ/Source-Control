@@ -5,7 +5,7 @@ async function run() {
   const service = new GitService()
   await service.openRepository(projectPath)
   await service.stageAll()
-  const oid = await service.commit("docs: update README, docs landing page, and UI fixes for v1.0.0 release")
+  const oid = await service.commit("docs: update one-click import link via htmlpreview like FileKit to resolve 404")
   console.log("Committed:", oid)
   const pushRes = await service.pushRemote("Source-Control", "master")
   console.log("Push result:", JSON.stringify(pushRes))

@@ -7,9 +7,10 @@ interface HistoryRowProps {
   commit: GitCommitInfo
   onSelect?: () => void
   language: AppLanguage
+  syncState?: "synced" | "local" | "remote" | "unknown"
 }
 
-export function HistoryRow({ commit, onSelect, language }: HistoryRowProps) {
+export function HistoryRow({ commit, onSelect, language, syncState }: HistoryRowProps) {
   const timeText = formatHistoryTime(commit.timestamp)
   const t = createTranslator(language)
 
@@ -23,6 +24,11 @@ export function HistoryRow({ commit, onSelect, language }: HistoryRowProps) {
           {timeText} · {commit.shortOid}
         </Text>
       </HStack>
+      {syncState ? (
+        <Text font="caption" foregroundStyle={syncState === "local" || syncState === "remote" ? "orange" : "secondaryLabel"}>
+          {syncState === "synced" ? "✓ 已同步" : syncState === "local" ? "仅本地" : syncState === "remote" ? "仅云端" : "同步状态未知"}
+        </Text>
+      ) : null}
     </VStack>
   )
 }

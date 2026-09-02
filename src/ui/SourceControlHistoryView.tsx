@@ -27,6 +27,7 @@ export function SourceControlHistoryView({ gitService, projectPath, language = "
   const dismiss = Navigation.useDismiss()
   const t = createTranslator(language)
   const [history, setHistory] = useState<GitCommitInfo[]>([])
+  const [remoteOids, setRemoteOids] = useState<Set<string> | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
@@ -34,7 +35,13 @@ export function SourceControlHistoryView({ gitService, projectPath, language = "
     setLoading(true)
     setErrorMessage(null)
     try {
-      setHistory(await gitService.getHistory(30))
+      const localHistory = await gitService.getHistory(30)
+      setHistory(localHistory)
+      try {
+        const remotes = await gitService.listRemotes(); const remote = remotes.find((item) => item.name === "origin") || remotes[0]; const branch = await gitService.getCurrentBranch()
+        if (remote && branch && (await gitService.listRemoteBranches(remote.name)).some((item) => item.name === branch)) setRemoteOids(new Set((await gitService.getRemoteHistory(remote.name, branch, 200)).map((item) => item.oid)))
+        else setRemoteOids(null)
+      } catch { setRemoteOids(null) }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -79,7 +86,7 @@ export function SourceControlHistoryView({ gitService, projectPath, language = "
       ) : null}
       {loading && history.length === 0 ? <Section><ProgressView /></Section> : null}
       {!loading && history.length === 0 && !errorMessage ? <Section><VStack spacing={8} alignment="center"><Text font="headline">{t("noHistory")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("noHistoryHint")}</Text></VStack></Section> : null}
-      {history.length > 0 ? <Section header={<Text>{`${t("historyTitle")} · ${history.length}`}</Text>}>{history.map((commit) => <HistoryRow key={commit.oid} commit={commit} language={language} onSelect={() => { openCommitDetail(commit).catch(console.error) }} />)}</Section> : null}
+      {history.length > 0 ? <Section header={<Text>{`${t("historyTitle")} · ${history.length}`}</Text>}>{history.map((commit) => <HistoryRow key={commit.oid} commit={commit} language={language} syncState={remoteOids === null ? "unknown" : remoteOids.has(commit.oid) ? "synced" : "local"} onSelect={() => { openCommitDetail(commit).catch(console.error) }} />)}</Section> : null}
     </List>
   )
 }

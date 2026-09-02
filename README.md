@@ -6,17 +6,23 @@
 
 ---
 
-## 📲 一键安装与导入
+## 📲 安装与导入
 
-在 iOS Safari 浏览器中点击下方按钮或链接即可直接一键唤起 Scripting 自动下载导入：
+### 方式一：一键导入（推荐）
+
+在 iOS Safari 浏览器中点击下方按钮即可一键唤起 Scripting 自动下载导入：
 
 [![一键安装导入](https://img.shields.io/badge/Scripting-一键导入-5856D6?style=for-the-badge&logo=apple&logoColor=white)](https://jiangweiqaq.github.io/Source-Control/)
 
-> **手动导入说明**：  
-> 若浏览器未能自动唤起，可复制下方链接或通过 Releases 下载 Zip 解压到 Scripting 脚本目录：  
-> ```text
-> iCloud 云盘/Scripting/scripts/Source Control
-> ```
+> **提示**：需在 iOS 设备的 Safari 浏览器中打开上述链接。如果无法自动唤起，也可以在打开的页面中点击下载 Release 压缩包。
+
+### 方式二：手动下载 Release 导入
+
+1. 前往 [Releases](https://github.com/JiangWeiQAQ/Source-Control/releases) 页面下载最新版本的 `Source-Control.zip`（或 [直接下载最新 v1.0.0 Release](https://github.com/JiangWeiQAQ/Source-Control/releases/download/v1.0.0/Source-Control.zip)）。
+2. 解压并将 `Source Control` 文件夹放置在 Scripting 脚本根目录下：
+   ```text
+   iCloud 云盘/Scripting/scripts/Source Control
+   ```
 
 ---
 
@@ -25,7 +31,7 @@
 <p align="center">
   <img src="docs/screenshot-home.jpg" width="45%" alt="项目管理首页" />
   &nbsp;&nbsp;
-  <img src="docs/screenshot.jpg" width="45%" alt="变更与版本管理" />
+  <img src="docs/screenshot-changes.jpg" width="45%" alt="变更与版本管理" />
 </p>
 
 ---
@@ -87,7 +93,7 @@ Source Control/
 ├── docs/                             # 文档、一键导入中转页与演示截图
 │   ├── index.html                    # Safari 一键导入中转页
 │   ├── screenshot-home.jpg           # 项目首页截图
-│   └── screenshot.jpg                # 变更管理界面截图
+│   └── screenshot-changes.jpg        # 变更管理界面截图
 └── src/
     ├── core/                         # Git 核心驱动层
     │   ├── GitService.ts             # 统一服务门面 (Facade)
@@ -112,4 +118,4 @@ Source Control/
 
 ## 📄 开源许可
 
-本项目遵循 [MIT License](LICENSE)。欢迎提交 Issue 或 Pull Request！
+本项目遵循 [MIT License](LICENSE)。

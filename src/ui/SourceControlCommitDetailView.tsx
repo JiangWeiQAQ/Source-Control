@@ -73,6 +73,11 @@ function splitPath(filepath: string): { filename: string; directory: string | nu
   return { filename, directory }
 }
 
+function formatVersionSummary(shortOid: string, message: string): string {
+  const summary = message.replace(/\s+/g, " ").trim() || "No commit message"
+  return `${shortOid} · ${summary}`
+}
+
 export function SourceControlCommitDetailView({
   gitService,
   oid,
@@ -83,7 +88,10 @@ export function SourceControlCommitDetailView({
   const dismiss = Navigation.useDismiss()
   const [detail, setDetail] = useState<GitCommitDetail | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
-  const [operation, setOperation] = useState<"revert" | null>(null)
+  const [restoreErrorTitle, setRestoreErrorTitle] = useState<string | null>(null)
+  const [restoreErrorMessage, setRestoreErrorMessage] = useState<string | null>(null)
+  const [restoreErrorDetail, setRestoreErrorDetail] = useState<string | null>(null)
+  const [restoreOperation, setRestoreOperation] = useState<"restoring" | "resetting" | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const loadDetail = async () => {
@@ -104,27 +112,120 @@ export function SourceControlCommitDetailView({
     loadDetail()
   }, [oid])
 
-  const handleRevert = async () => {
-    if (!detail || detail.parents.length !== 1 || operation !== null) return
+  const handleRestore = async () => {
+    if (!detail || restoreOperation !== null) return
 
+    setRestoreErrorTitle(null)
+    setRestoreErrorMessage(null)
+    setRestoreErrorDetail(null)
     const selected = await Dialog.actionSheet({
-      title: "Revert Commit?",
-      message: `Revert "${detail.message}"?\n\nA new commit will be created. History will be preserved.`,
-      actions: [{ label: "Revert", destructive: true }],
+      title: "恢复方式",
+      message: `恢复目标：${detail.shortOid}\n\n保存为最新版本（推荐）\n使用该历史版本的文件内容恢复工作区。\n当前版本和全部历史都会保留。\n恢复后请填写版本说明并保存为新的本地版本。\n\n直接回退（高级）\n将本地分支直接回退到此 Commit。\n此 Commit 之后的版本将不再属于当前分支历史。`,
+      actions: [
+        { label: "1. 保存为最新版本（推荐）" },
+        { label: "2. 直接回退（高级）", destructive: true },
+      ],
     })
-    if (selected !== 0) return
 
-    setOperation("revert")
-    setErrorMessage(null)
+    if (selected === null) return
+    if (selected === 0) {
+      const confirmed = await Dialog.confirm({
+        title: "恢复此版本？",
+        message: "将使用此版本的文件内容恢复工作区。\n\n当前版本和全部历史都会保留。\n恢复后需要填写版本说明并保存为新的本地版本。\n\n不会自动同步到 GitHub。",
+        cancelLabel: "取消",
+        confirmLabel: "恢复",
+      })
+      if (!confirmed) return
+
+      setRestoreOperation("restoring")
+      try {
+        const result = await gitService.restoreCommitToWorkingTree(detail.oid)
+        if (!result.restored && result.changedFiles === 0) {
+          await Dialog.alert({ title: "已经是此版本", message: "当前文件内容与所选版本一致。" })
+          return
+        }
+
+        await Dialog.alert({
+          title: "版本内容已恢复",
+          message: `已恢复 ${result.changedFiles} 个文件。\n这些改动保持为未暂存状态。\n请返回首页填写版本说明并保存为新的本地版本。\n\n不会自动同步到 GitHub。`,
+        })
+        try {
+          await onCommitReverted?.()
+        } catch (callbackError) {
+          console.error("[CommitDetail] restore callback failed", callbackError)
+        }
+        dismiss({ restored: true, oid: result.oid, shortOid: result.shortOid, changedFiles: result.changedFiles })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const isDirty = message.includes("Working tree must be clean before restoring a historical version.") || message.includes("当前工作区必须干净") || message.includes("DIRTY_WORKTREE")
+        setRestoreErrorMessage(isDirty ? "当前还有暂存、未暂存或未跟踪的改动。\n请先保存或处理这些改动，再恢复历史版本。" : "无法恢复版本")
+        setRestoreErrorDetail(message)
+      } finally {
+        setRestoreOperation(null)
+      }
+      return
+    }
+
+    const firstConfirmed = await Dialog.confirm({
+      title: "直接回退到此版本？",
+      message: "此操作会把当前本地分支移动到所选版本。\n\n此版本之后的本地提交将不再显示在当前分支历史中。\n\nSource Control 会保留一个内部恢复点，因此之后仍有机会找回回退前版本。\n\n不会自动修改 GitHub。",
+      cancelLabel: "取消",
+      confirmLabel: "继续",
+    })
+    if (!firstConfirmed) return
+
+    setRestoreOperation("resetting")
     try {
-      const result = await gitService.revertCommit(detail.oid)
-      await Dialog.alert({ title: "Reverted", message: result.shortOid })
-      await onCommitReverted?.()
-      dismiss()
+      const currentHistory = await gitService.getHistory(1)
+      const currentVersion = currentHistory[0]
+      if (!currentVersion) {
+        setRestoreErrorTitle("无法直接回退")
+        setRestoreErrorMessage("无法读取当前本地版本。\n请稍后重试。")
+        return
+      }
+
+      const secondSelection = await Dialog.actionSheet({
+        title: "确认直接回退？",
+        message: `当前版本：\n${formatVersionSummary(currentVersion.shortOid, currentVersion.message)}\n\n目标版本：\n${formatVersionSummary(detail.shortOid, detail.message)}\n\n回退后 Working Tree 和 Index 都会切换到目标版本。\n\n如果当前版本已经同步到 GitHub，本地与 GitHub 可能暂时不一致。`,
+        cancelButton: false,
+        actions: [
+          { label: "取消" },
+          { label: "直接回退", destructive: true },
+        ],
+      })
+      if (secondSelection !== 1) return
+
+      const result = await gitService.resetBranchToCommit(detail.oid)
+      if (!result.reset) {
+        await Dialog.alert({ title: "已经位于此版本", message: "当前本地分支已经位于所选版本。" })
+        return
+      }
+
+      await Dialog.alert({
+        title: "已回退到此版本",
+        message: `当前本地分支已回退到：${result.shortOid}\n\n回退前版本已保留为内部恢复点。\n\nGitHub 未被修改。`,
+      })
+      try {
+        await onCommitReverted?.()
+      } catch (callbackError) {
+        console.error("[CommitDetail] reset callback failed", callbackError)
+      }
+      dismiss({ reset: true, fromOid: result.fromOid, toOid: result.toOid, shortOid: result.shortOid })
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      const isDirty = message.includes("Working tree must be clean before resetting the branch.") || message.includes("当前工作区必须干净") || message.includes("RESET_DIRTY_WORKTREE")
+      const isNonAncestor = message.includes("Target commit is not an ancestor of the current branch.") || message.includes("RESET_NON_ANCESTOR")
+      setRestoreErrorTitle("无法直接回退")
+      if (isDirty) {
+        setRestoreErrorMessage("当前还有未保存的本地改动。\n请先保存或处理这些改动。")
+      } else if (isNonAncestor) {
+        setRestoreErrorMessage("只能直接回退到当前本地分支中的历史版本。")
+      } else {
+        setRestoreErrorMessage("直接回退没有完成。")
+      }
+      setRestoreErrorDetail(message)
     } finally {
-      setOperation(null)
+      setRestoreOperation(null)
     }
   }
 
@@ -233,19 +334,42 @@ export function SourceControlCommitDetailView({
             </VStack>
           </Section>
 
-          {!readOnly && detail.parents.length === 1 ? (
-            <Section header={<Text font="footnote">REVERT</Text>}>
+          {restoreErrorMessage ? (
+            <Section>
+              <VStack spacing={6} alignment="leading">
+                <HStack spacing={6} alignment="center">
+                  <Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" />
+                  <Text font="headline" foregroundStyle="red">
+                    {restoreErrorTitle || "无法恢复版本"}
+                  </Text>
+                </HStack>
+                <Text font="footnote" foregroundStyle="secondaryLabel">
+                  {restoreErrorMessage}
+                </Text>
+                {restoreErrorDetail ? (
+                  <Text font="caption2" foregroundStyle="tertiaryLabel">
+                    {restoreErrorDetail}
+                  </Text>
+                ) : null}
+              </VStack>
+            </Section>
+          ) : null}
+
+          {!readOnly ? (
+            <Section header={<Text font="footnote">恢复</Text>}>
               <VStack spacing={6} alignment="leading">
                 <Text font="footnote" foregroundStyle="secondaryLabel">
-                  Revert creates a new commit and preserves history.
+                  推荐使用“保存为最新版本”：创建新的本地版本，不删除现有历史。
+                </Text>
+                <Text font="caption" foregroundStyle="tertiaryLabel">
+                  恢复后不会自动暂存、提交或同步到 GitHub。
                 </Text>
                 <Button
-                  title={operation === "revert" ? "Reverting…" : "Revert Commit"}
+                  title="恢复此版本"
                   systemImage="arrow.uturn.backward"
                   buttonStyle="bordered"
-                  role="destructive"
-                  disabled={operation !== null}
-                  action={handleRevert}
+                  disabled={loading || restoreOperation !== null}
+                  action={handleRestore}
                 />
               </VStack>
             </Section>

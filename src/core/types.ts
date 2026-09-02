@@ -129,6 +129,21 @@ export interface GitSafetySnapshotRestoreResult {
   changedFiles: number
 }
 
+/** 将历史 Commit Tree 非破坏性应用为未暂存 Working Tree 变更的结果。 */
+export interface GitCommitWorkingTreeRestoreResult {
+  restored: boolean
+  oid: string
+  shortOid: string
+  changedFiles: number
+}
+
+export interface GitBranchResetResult {
+  reset: boolean
+  fromOid: string
+  toOid: string
+  shortOid: string
+}
+
 export interface GitSafetySnapshotInfo {
   ref: string
   oid: string

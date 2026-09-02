@@ -3,7 +3,7 @@
  * 封装单个 Git 仓库的具体操作，隐藏 isomorphic-git 的低层调用细节
  */
 
-import { GitAheadBehind, GitAuthor, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter, IsomorphicGitHttpClient } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter, IsomorphicGitHttpClient } from "./types"
 import { GitStatus } from "./GitStatus"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { GitDiff } from "./GitDiff"
@@ -61,6 +61,33 @@ interface SnapshotRestoreOperation {
   snapshotBytes: Uint8Array | null
   previousExists: boolean
   previousBytes: Uint8Array | null
+}
+
+interface CommitWorkingTreeRestoreOperation {
+  filepath: string
+  targetBytes: Uint8Array | null
+  previousExists: boolean
+  previousBytes: Uint8Array | null
+}
+
+interface CommitRestoreMetadata {
+  headOid: string
+  headContents: string
+  branch: string | null
+  branchOid: string | null
+  remoteRefs: Map<string, string>
+  historyOids: string[]
+}
+
+interface BranchResetMetadata {
+  headContents: string
+  branch: string
+  branchRef: string
+  branchOid: string
+  index: Uint8Array
+  workingTree: Map<string, Uint8Array>
+  remoteRefs: Map<string, string>
+  historyOids: string[]
 }
 
 /**
@@ -887,6 +914,323 @@ export class GitRepository {
     } catch (error) {
       throw new Error(GitSafety.formatErrorMessage(error, "恢复 Safety Snapshot"))
     }
+  }
+
+  /** 直接将当前本地分支安全回退到指定祖先 Commit。 */
+  async resetBranchToCommit(oid: string): Promise<GitBranchResetResult> {
+    const targetOid = typeof oid === "string" ? oid.trim() : ""
+    if (!/^[0-9a-f]{40}$/i.test(targetOid)) throw new GitSafetyError("Commit OID 格式不合法", "INVALID_COMMIT_OID")
+    try {
+      const status = await this.getStatus()
+      if (!status.isClean) throw new GitSafetyError("Working tree must be clean before resetting the branch.", "RESET_DIRTY_WORKTREE")
+      const branch = await this.getCurrentBranch()
+      if (!branch) throw new GitSafetyError("Cannot reset a detached HEAD.", "RESET_DETACHED_HEAD")
+      const branchRef = `refs/heads/${branch}`
+      let fromOid: string
+      try { fromOid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: "HEAD" }) } catch { throw new GitSafetyError("Cannot reset an unborn branch.", "RESET_UNBORN_BRANCH") }
+      const targetCommit = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid: targetOid })
+      const headCommit = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid: fromOid })
+      if (!await this.isCommitAncestor(targetOid, fromOid)) throw new GitSafetyError("Target commit is not an ancestor of the current branch.", "RESET_NON_ANCESTOR")
+      const targetFiles = await this.readTreeContent(targetCommit.commit.tree)
+      const currentFiles = await this.readTreeContent(headCommit.commit.tree)
+      await this.preflightResetTarget(targetFiles, currentFiles)
+      const metadata = await this.captureBranchResetMetadata(branch, branchRef, fromOid)
+      if (targetOid === fromOid) return { reset: false, fromOid, toOid: targetOid, shortOid: targetOid.slice(0, 7) }
+      const backupRef = `refs/source-control/reset-backups/${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      try {
+        await this.git.writeRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: backupRef, value: fromOid, force: false })
+        await this.git.checkout({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: targetOid, force: false })
+        await FileManager.writeAsString(`${this.gitdir}/HEAD`, metadata.headContents, "utf8")
+        await this.git.writeRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: branchRef, value: targetOid, force: true })
+        await this.assertBranchResetMetadata(metadata, branchRef, targetOid)
+        if (!(await this.getStatus()).isClean) throw new Error("Reset did not produce a clean working tree")
+        return { reset: true, fromOid, toOid: targetOid, shortOid: targetOid.slice(0, 7) }
+      } catch (applyError) {
+        try { await this.restoreBranchResetState(metadata) } catch { throw new Error("Reset failed and rollback was incomplete. Repository requires manual inspection.") }
+        throw applyError
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message === "Reset failed and rollback was incomplete. Repository requires manual inspection.") throw error
+      throw new Error(GitSafety.formatErrorMessage(error, "回退本地分支"))
+    }
+  }
+
+  private async isCommitAncestor(ancestorOid: string, descendantOid: string): Promise<boolean> {
+    const pending = [descendantOid]; const visited = new Set<string>()
+    while (pending.length > 0) {
+      const current = pending.pop()!
+      if (current === ancestorOid) return true
+      if (visited.has(current)) continue
+      visited.add(current)
+      const commit = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid: current })
+      pending.push(...commit.commit.parent)
+    }
+    return false
+  }
+
+  private async captureBranchResetMetadata(branch: string, branchRef: string, branchOid: string): Promise<BranchResetMetadata> {
+    const remoteRefs = new Map<string, string>()
+    for (const remote of await this.listRemotes()) {
+      const prefix = `refs/remotes/${remote.name}`
+      for (const suffix of await this.git.listRefs({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, filepath: prefix })) {
+        if (suffix === "HEAD" || suffix.endsWith("/HEAD")) continue
+        const ref = `${prefix}/${suffix}`
+        remoteRefs.set(ref, await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref }))
+      }
+    }
+    const history = await this.git.log({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir })
+    return { headContents: await FileManager.readAsString(`${this.gitdir}/HEAD`, "utf8"), branch, branchRef, branchOid, index: await FileManager.readAsBytes(`${this.gitdir}/index`), workingTree: await this.capturePullWorkingTree(), remoteRefs, historyOids: history.map((entry) => entry.oid) }
+  }
+
+  private async assertBranchResetMetadata(before: BranchResetMetadata, branchRef: string, targetOid: string): Promise<void> {
+    if (await FileManager.readAsString(`${this.gitdir}/HEAD`, "utf8") !== before.headContents) throw new Error("Reset changed HEAD symbolic state")
+    if (await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: branchRef }) !== targetOid) throw new Error("Reset did not update the requested branch")
+    const remoteRefs = new Map<string, string>()
+    for (const remote of await this.listRemotes()) {
+      const prefix = `refs/remotes/${remote.name}`
+      for (const suffix of await this.git.listRefs({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, filepath: prefix })) {
+        if (suffix === "HEAD" || suffix.endsWith("/HEAD")) continue
+        const ref = `${prefix}/${suffix}`; remoteRefs.set(ref, await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref }))
+      }
+    }
+    if (!this.areStringMapsEqual(before.remoteRefs, remoteRefs)) throw new Error("Reset changed remote refs")
+  }
+
+  private async restoreBranchResetState(before: BranchResetMetadata): Promise<void> {
+    await this.restorePullWorkingTree(before.workingTree, new Map())
+    await FileManager.writeAsBytes(`${this.gitdir}/index`, before.index)
+    await this.git.writeRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: before.branchRef, value: before.branchOid, force: true })
+    await FileManager.writeAsString(`${this.gitdir}/HEAD`, before.headContents, "utf8")
+  }
+
+  private async preflightResetTarget(targetFiles: Map<string, Uint8Array>, currentFiles: Map<string, Uint8Array>): Promise<void> {
+    const paths = new Set([...targetFiles.keys(), ...currentFiles.keys()])
+    const targetPaths = [...targetFiles.keys()]
+    const currentPaths = [...currentFiles.keys()]
+    for (const targetPath of targetPaths) {
+      if (currentPaths.some((currentPath) => currentPath.startsWith(`${targetPath}/`)) || currentPaths.some((currentPath) => targetPath.startsWith(`${currentPath}/`))) {
+        throw new GitSafetyError(`Reset path conflict: tree file/directory layout differs at "${targetPath}".`, "RESET_PATH_CONFLICT")
+      }
+    }
+    for (const filepath of paths) {
+      const cleanPath = GitSafety.validateSnapshotTreePath(filepath); const parts = cleanPath.split("/")
+      for (let index = 1; index <= parts.length; index += 1) {
+        const candidate = `${this.projectPath}/${parts.slice(0, index).join("/")}`
+        if (!(await FileManager.exists(candidate))) continue
+        const needsDirectory = index < parts.length
+        if (needsDirectory && !(await FileManager.isDirectory(candidate))) throw new GitSafetyError(`Reset path conflict: "${parts.slice(0, index).join("/")}" is a file but a directory is required.`, "RESET_PATH_CONFLICT")
+        if (!needsDirectory && await FileManager.isDirectory(candidate)) throw new GitSafetyError(`Reset path conflict: "${cleanPath}" is a directory but a file is required.`, "RESET_PATH_CONFLICT")
+      }
+    }
+  }
+  /**
+   * 将指定历史 Commit 的完整 Tree 非破坏性写入干净 Working Tree。
+   * HEAD、分支、Index 和 Git refs 均保持不变；差异仅表现为未暂存变更。
+   */
+  async restoreCommitToWorkingTree(oid: string): Promise<GitCommitWorkingTreeRestoreResult> {
+    const targetOid = typeof oid === "string" ? oid.trim() : ""
+    if (!/^[0-9a-f]{40}$/i.test(targetOid)) throw new GitSafetyError("Commit OID 格式不合法", "INVALID_COMMIT_OID")
+    try {
+      const status = await this.getStatus()
+      if (!status.isClean) throw new GitSafetyError("Working tree must be clean before restoring a historical version.", "DIRTY_WORKTREE")
+      const metadataBefore = await this.captureCommitRestoreMetadata()
+      const indexPath = `${this.gitdir}/index`
+      const indexBefore = await FileManager.readAsBytes(indexPath)
+      const targetCommit = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid: targetOid })
+      const headCommit = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid: metadataBefore.headOid })
+      const targetFiles = await this.readTreeContent(targetCommit.commit.tree)
+      const headFiles = await this.readTreeContent(headCommit.commit.tree)
+      const operations: CommitWorkingTreeRestoreOperation[] = []
+      const createdDirectories = new Set<string>()
+
+      for (const filepath of new Set([...headFiles.keys(), ...targetFiles.keys()])) {
+        const cleanPath = GitSafety.validateSnapshotTreePath(filepath)
+        const headBytes = headFiles.get(cleanPath)
+        const targetBytes = targetFiles.get(cleanPath)
+        if (headBytes && targetBytes && this.areBytesEqual(headBytes, targetBytes)) continue
+        await this.assertCommitRestorePathSafe(cleanPath, targetBytes !== undefined, headFiles)
+        const fullPath = `${this.projectPath}/${cleanPath}`
+        const previousExists = await FileManager.exists(fullPath)
+        if (previousExists && await FileManager.isDirectory(fullPath)) {
+          throw new GitSafetyError(`无法安全恢复 Commit：目标路径是目录 "${cleanPath}"`, "COMMIT_RESTORE_PATH_CONFLICT", { filepath: cleanPath })
+        }
+        const previousBytes = previousExists ? await FileManager.readAsBytes(fullPath) : null
+        if (headBytes !== undefined && (!previousExists || !previousBytes || !this.areBytesEqual(headBytes, previousBytes))) {
+          throw new GitSafetyError(`恢复前工作区内容与当前 HEAD 不一致: "${cleanPath}"`, "COMMIT_RESTORE_RACE_CONFLICT", { filepath: cleanPath })
+        }
+        // HEAD 没有该文件时，磁盘上的同名文件可能是 ignored/untracked 数据，禁止覆盖。
+        if (targetBytes !== undefined && headBytes === undefined && previousExists) {
+          throw new GitSafetyError(`无法安全恢复 Commit：目标路径已有文件 "${cleanPath}"`, "COMMIT_RESTORE_PATH_CONFLICT", { filepath: cleanPath })
+        }
+        if (targetBytes !== undefined) {
+          for (const directory of this.parentDirectories(cleanPath)) {
+            const directoryPath = `${this.projectPath}/${directory}`
+            if (!(await FileManager.exists(directoryPath))) createdDirectories.add(directoryPath)
+          }
+        }
+        operations.push({ filepath: cleanPath, targetBytes: targetBytes ?? null, previousExists, previousBytes })
+      }
+      if (operations.length === 0) return { restored: false, oid: targetOid, shortOid: targetOid.slice(0, 7), changedFiles: 0 }
+
+      const appliedOperations: CommitWorkingTreeRestoreOperation[] = []
+      try {
+        for (const operation of operations.filter((item) => item.targetBytes === null).sort((a, b) => b.filepath.length - a.filepath.length)) {
+          await this.assertCommitRestoreOperationPrecondition(operation)
+          appliedOperations.push(operation)
+          await this.applyCommitWorkingTreeRestoreOperation(operation)
+        }
+        for (const operation of operations.filter((item) => item.targetBytes !== null).sort((a, b) => a.filepath.length - b.filepath.length)) {
+          await this.assertCommitRestoreOperationPrecondition(operation)
+          appliedOperations.push(operation)
+          await this.applyCommitWorkingTreeRestoreOperation(operation)
+        }
+        await this.assertCommitRestoreMetadataUnchanged(metadataBefore)
+        await this.assertWorkingTreeMatchesCommit(targetFiles, operations)
+        const indexAfter = await FileManager.readAsBytes(indexPath)
+        if (!this.areBytesEqual(indexBefore, indexAfter)) throw new Error("Restore unexpectedly changed the Index")
+      } catch (applyError) {
+        try {
+          await this.rollbackCommitWorkingTreeRestoreOperations(appliedOperations, createdDirectories)
+          await this.restoreIndexSnapshot(indexPath, indexBefore)
+          await this.assertCommitRestoreMetadataUnchanged(metadataBefore)
+          if (!this.areBytesEqual(indexBefore, await FileManager.readAsBytes(indexPath))) throw new Error("Index changed during restore")
+        } catch {
+          throw new Error("Restore failed and rollback was incomplete. Repository requires manual inspection.")
+        }
+        throw applyError
+      }
+      return { restored: true, oid: targetOid, shortOid: targetOid.slice(0, 7), changedFiles: operations.length }
+    } catch (error) {
+      if (error instanceof Error && error.message === "Restore failed and rollback was incomplete. Repository requires manual inspection.") throw error
+      throw new Error(GitSafety.formatErrorMessage(error, "恢复历史 Commit"))
+    }
+  }
+
+  private async captureCommitRestoreMetadata(): Promise<CommitRestoreMetadata> {
+    const headOid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: "HEAD" })
+    const headContents = await FileManager.readAsString(`${this.gitdir}/HEAD`, "utf8")
+    const branch = await this.getCurrentBranch()
+    const branchOid = branch ? await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: `refs/heads/${branch}` }) : null
+    const remoteRefs = new Map<string, string>()
+    for (const remote of await this.listRemotes()) {
+      const prefix = `refs/remotes/${remote.name}`
+      const suffixes = await this.git.listRefs({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, filepath: prefix })
+      for (const suffix of suffixes) {
+        const ref = `${prefix}/${suffix}`
+        remoteRefs.set(ref, await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref }))
+      }
+    }
+    const history = await this.git.log({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir })
+    return { headOid, headContents, branch, branchOid, remoteRefs, historyOids: history.map((entry) => entry.oid) }
+  }
+
+  private async assertCommitRestoreMetadataUnchanged(before: CommitRestoreMetadata): Promise<void> {
+    const after = await this.captureCommitRestoreMetadata()
+    if (before.headOid !== after.headOid || before.headContents !== after.headContents || before.branch !== after.branch || before.branchOid !== after.branchOid) throw new Error("Restore unexpectedly changed HEAD or branch")
+    if (!this.areStringMapsEqual(before.remoteRefs, after.remoteRefs) || !this.areStringArraysEqual(before.historyOids, after.historyOids)) throw new Error("Restore unexpectedly changed refs or history")
+  }
+
+  private async assertWorkingTreeMatchesCommit(targetFiles: Map<string, Uint8Array>, operations: CommitWorkingTreeRestoreOperation[]): Promise<void> {
+    const paths = new Set(operations.map((operation) => operation.filepath))
+    for (const [filepath, bytes] of targetFiles) {
+      const fullPath = `${this.projectPath}/${filepath}`
+      if (!(await FileManager.exists(fullPath)) || await FileManager.isDirectory(fullPath) || !this.areBytesEqual(bytes, await FileManager.readAsBytes(fullPath))) throw new Error(`Working Tree 未匹配目标 Commit: "${filepath}"`)
+    }
+    for (const operation of operations.filter((item) => item.targetBytes === null)) {
+      if (await FileManager.exists(`${this.projectPath}/${operation.filepath}`)) throw new Error(`Working Tree 未删除目标文件: "${operation.filepath}"`)
+    }
+    const status = await this.getStatus()
+    if (status.isClean || status.stagedChanges.length > 0 || status.changes.some((change) => !paths.has(change.filepath))) throw new Error("恢复后工作区状态不符合预期")
+  }
+
+  private parentDirectories(filepath: string): string[] {
+    const parts = filepath.split("/").slice(0, -1); const directories: string[] = []
+    for (let index = 1; index <= parts.length; index++) directories.push(parts.slice(0, index).join("/"))
+    return directories
+  }
+
+  private async assertCommitRestorePathSafe(filepath: string, willWriteFile: boolean, headFiles: Map<string, Uint8Array>): Promise<void> {
+    if (willWriteFile && [...headFiles.keys()].some((headPath) => headPath.startsWith(`${filepath}/`))) {
+      throw new GitSafetyError(`无法安全恢复 Commit：目标文件与当前目录冲突 "${filepath}"`, "COMMIT_RESTORE_FILE_DIRECTORY_CONFLICT", { filepath })
+    }
+    const parts = filepath.split("/")
+    for (let index = 1; index < parts.length; index++) {
+      const ancestorPath = `${this.projectPath}/${parts.slice(0, index).join("/")}`
+      if (await FileManager.exists(ancestorPath) && !(await FileManager.isDirectory(ancestorPath))) {
+        throw new GitSafetyError(`无法安全恢复 Commit：父路径是文件 "${parts.slice(0, index).join("/")}"`, "COMMIT_RESTORE_FILE_DIRECTORY_CONFLICT", { filepath })
+      }
+    }
+    if (willWriteFile) {
+      const fullPath = `${this.projectPath}/${filepath}`
+      if (await FileManager.exists(fullPath) && await FileManager.isDirectory(fullPath)) {
+        throw new GitSafetyError(`无法安全恢复 Commit：目标路径是目录 "${filepath}"`, "COMMIT_RESTORE_FILE_DIRECTORY_CONFLICT", { filepath })
+      }
+    }
+  }
+
+  private async applyCommitWorkingTreeRestoreOperation(operation: CommitWorkingTreeRestoreOperation): Promise<void> {
+    const fullPath = `${this.projectPath}/${operation.filepath}`
+    if (operation.targetBytes === null) { if (await FileManager.exists(fullPath)) await FileManager.remove(fullPath); return }
+    const parentPath = fullPath.substring(0, fullPath.lastIndexOf("/"))
+    if (await FileManager.exists(parentPath) && !(await FileManager.isDirectory(parentPath))) throw new GitSafetyError(`恢复期间检测到文件/目录冲突: "${operation.filepath}"`, "COMMIT_RESTORE_RACE_CONFLICT")
+    if (!(await FileManager.exists(parentPath))) await FileManager.createDirectory(parentPath, true)
+    if (await FileManager.exists(fullPath) && await FileManager.isDirectory(fullPath)) throw new GitSafetyError(`恢复期间检测到文件/目录冲突: "${operation.filepath}"`, "COMMIT_RESTORE_RACE_CONFLICT")
+    await FileManager.writeAsBytes(fullPath, operation.targetBytes)
+  }
+
+  private async assertCommitRestoreOperationPrecondition(operation: CommitWorkingTreeRestoreOperation): Promise<void> {
+    const fullPath = `${this.projectPath}/${operation.filepath}`
+    const exists = await FileManager.exists(fullPath)
+    if (exists !== operation.previousExists) throw new GitSafetyError(`恢复前后文件状态发生变化: "${operation.filepath}"`, "COMMIT_RESTORE_RACE_CONFLICT")
+    if (!exists) return
+    if (await FileManager.isDirectory(fullPath)) throw new GitSafetyError(`恢复期间检测到文件/目录冲突: "${operation.filepath}"`, "COMMIT_RESTORE_RACE_CONFLICT")
+    if (!operation.previousBytes || !this.areBytesEqual(operation.previousBytes, await FileManager.readAsBytes(fullPath))) throw new GitSafetyError(`恢复前后文件内容发生变化: "${operation.filepath}"`, "COMMIT_RESTORE_RACE_CONFLICT")
+  }
+
+  private async rollbackCommitWorkingTreeRestoreOperations(operations: CommitWorkingTreeRestoreOperation[], createdDirectories: Set<string>): Promise<void> {
+    for (const operation of [...operations].sort((a, b) => b.filepath.length - a.filepath.length)) {
+      const fullPath = `${this.projectPath}/${operation.filepath}`
+      const exists = await FileManager.exists(fullPath)
+      if (operation.targetBytes !== null) {
+        if (!exists) {
+          if (operation.previousExists) throw new Error(`回滚文件丢失: ${operation.filepath}`)
+          continue
+        }
+        if (await FileManager.isDirectory(fullPath)) throw new Error(`回滚路径是目录: ${operation.filepath}`)
+        const currentBytes = await FileManager.readAsBytes(fullPath)
+        if (!this.areBytesEqual(currentBytes, operation.targetBytes) && (!operation.previousExists || !operation.previousBytes || !this.areBytesEqual(currentBytes, operation.previousBytes))) throw new Error(`回滚路径内容未知: ${operation.filepath}`)
+        if (this.areBytesEqual(currentBytes, operation.targetBytes)) await FileManager.remove(fullPath)
+      } else if (exists) {
+        if (!operation.previousExists || !operation.previousBytes || await FileManager.isDirectory(fullPath) || !this.areBytesEqual(await FileManager.readAsBytes(fullPath), operation.previousBytes)) throw new Error(`回滚删除路径内容未知: ${operation.filepath}`)
+      }
+    }
+    for (const operation of operations.filter((item) => item.previousExists).sort((a, b) => a.filepath.length - b.filepath.length)) {
+      const fullPath = `${this.projectPath}/${operation.filepath}`; const parentPath = fullPath.substring(0, fullPath.lastIndexOf("/"))
+      if (!(await FileManager.exists(parentPath))) await FileManager.createDirectory(parentPath, true)
+      if (await FileManager.exists(fullPath) && await FileManager.isDirectory(fullPath)) throw new Error(`回滚目标是目录: ${operation.filepath}`)
+      await FileManager.writeAsBytes(fullPath, operation.previousBytes!)
+    }
+    for (const directory of [...createdDirectories].sort((left, right) => right.length - left.length)) {
+      if (await FileManager.exists(directory) && await FileManager.isDirectory(directory)) {
+        const entries = await FileManager.readDirectory(directory)
+        if (!entries || entries.length === 0) await FileManager.remove(directory)
+      }
+    }
+  }
+
+  private async restoreIndexSnapshot(indexPath: string, indexBefore: Uint8Array): Promise<void> {
+    if (!this.areBytesEqual(indexBefore, await FileManager.readAsBytes(indexPath))) {
+      await FileManager.writeAsBytes(indexPath, indexBefore)
+      if (!this.areBytesEqual(indexBefore, await FileManager.readAsBytes(indexPath))) throw new Error("Index rollback failed")
+    }
+  }
+
+  private areStringArraysEqual(left: string[], right: string[]): boolean { return left.length === right.length && left.every((value, index) => value === right[index]) }
+
+  private areStringMapsEqual(left: Map<string, string>, right: Map<string, string>): boolean {
+    if (left.size !== right.size) return false
+    for (const [key, value] of left) if (right.get(key) !== value) return false
+    return true
   }
 
   private areBytesEqual(left: Uint8Array, right: Uint8Array): boolean {

@@ -4,7 +4,7 @@
  */
 
 import { GitRepository } from "./GitRepository"
-import { GitAheadBehind, GitAuthor, GitCommitDetail, GitCommitInfo, GitCommitResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { loadBufferPolyfill } from "../polyfills"
 
@@ -505,6 +505,15 @@ export class GitService {
   /** 仅读取已 Fetch 的 remote-tracking ref 历史，不执行网络访问。 */
   async getRemoteHistory(remoteName?: string, branchName?: string, limit?: number): Promise<GitCommitInfo[]> {
     return this.ensureRepository().getRemoteHistory(remoteName, branchName, limit)
+  }
+
+  /** 将历史 Commit Tree 作为未暂存变更恢复到干净 Working Tree，不移动 HEAD/分支或修改 Index。 */
+  async restoreCommitToWorkingTree(oid: string): Promise<GitCommitWorkingTreeRestoreResult> {
+    return this.ensureRepository().restoreCommitToWorkingTree(oid)
+  }
+
+  async resetBranchToCommit(oid: string): Promise<GitBranchResetResult> {
+    return this.ensureRepository().resetBranchToCommit(oid)
   }
 
   /** 获取单个 Commit 的元数据和文件变更。 */

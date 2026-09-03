@@ -79,7 +79,7 @@ function EmptyChangesView({ loading, t, language }: { loading: boolean; t: (key:
 function AllFilesSection({ files, showAllFiles, onToggle, selectedFolder, onSelect, language }: { files: ProjectFileEntry[]; showAllFiles: boolean; onToggle: () => void; selectedFolder: string; onSelect: (folder: string) => void; language: AppLanguage }) {
   const groups = projectFileGroups(files)
   return <Section header={<Text>{language === "zh-Hans" ? "全部文件" : "All Files"}</Text>}>
-    <Button action={onToggle} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
+    <Button action={() => onToggle()} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
       <HStack spacing={8} alignment="center" frame={{ maxWidth: "infinity", minHeight: 58, alignment: "leading" }} padding={{ horizontal: 14, vertical: 10 }} background="secondarySystemBackground" clipShape={{ type: "rect", cornerRadius: 12 }}>
         <Image systemName="folder" foregroundStyle="blue" />
         <VStack spacing={2} alignment="leading"><Text font="subheadline">{language === "zh-Hans" ? `全部文件 · ${files.length}` : `All Files · ${files.length}`}</Text><Text font="caption" foregroundStyle="secondaryLabel">{language === "zh-Hans" ? "浏览项目中的所有文件" : "Browse all project files"}</Text></VStack>
@@ -154,7 +154,9 @@ export function SourceControlChangesView({ gitService: propGitService, projectPa
 
   return <VStack spacing={0} alignment="leading" frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
     <HStack frame={{ maxWidth: "infinity", minHeight: 52, alignment: "center" }} padding={{ horizontal: 4, vertical: 4 }} background="clear">
-      <HeaderIconButton systemImage="xmark" onPress={() => dismiss()} />
+      <Button action={() => dismiss()} buttonStyle="borderless" contentShape={{ kind: "interaction", shape: "rect" }}>
+        <HStack frame={{ width: 44, height: 44, alignment: "center" }}><Image systemName="xmark" /></HStack>
+      </Button>
       <Spacer />
       <HeaderIconButton systemImage="gearshape" onPress={openSettings} />
     </HStack>

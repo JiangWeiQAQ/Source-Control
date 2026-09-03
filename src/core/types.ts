@@ -70,6 +70,16 @@ export interface GitPushResult {
   remoteOidAfter: string | null
 }
 
+export interface GitSyncRecord {
+  id: string
+  remoteName: string
+  branchName: string
+  targetOid: string
+  previousRemoteOid?: string
+  syncedAt: number
+  commitsUploaded: number
+  kind?: "push" | "baseline"
+}
 export interface GitAheadBehind {
   localBranch: string
   remote: string

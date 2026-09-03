@@ -4,9 +4,10 @@
  */
 
 import { GitRepository } from "./GitRepository"
-import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, GitSyncRecord, IsomorphicGitAdapter } from "./types"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { loadBufferPolyfill } from "../polyfills"
+import { ensureBaseline, recordSync, listSyncRecords as readSyncRecords } from "./GitSyncHistory"
 
 declare const Buffer: any
 
@@ -439,7 +440,51 @@ export class GitService {
 
   /** 仅执行 fast-forward HTTPS Push，不会 Force、Fetch、Merge 或修改工作区。 */
   async pushRemote(remoteName?: string, branchName?: string): Promise<GitPushResult> {
-    return this.ensureRepository().pushRemote(remoteName, branchName)
+    const repository = this.ensureRepository()
+    const remote = remoteName || "origin"
+    const branch = branchName || await repository.getCurrentBranch()
+    let before: GitAheadBehind | null = null
+    try {
+      if (branch) before = await repository.getAheadBehind(remote, branch)
+    } catch {
+      before = null
+    }
+    const result = await repository.pushRemote(remoteName, branchName)
+    if (result.pushed && branch) {
+      const commitsUploaded = before ? before.ahead : (await repository.getHistory(200)).length
+      const record: GitSyncRecord = {
+        id: `${Date.now()}-${result.localOid}`,
+        remoteName: result.remote,
+        branchName: result.branch,
+        targetOid: result.localOid,
+        ...(result.remoteOidBefore ? { previousRemoteOid: result.remoteOidBefore } : {}),
+        syncedAt: Math.floor(Date.now() / 1000),
+        commitsUploaded,
+        kind: "push",
+      }
+      try {
+        await recordSync(repository.projectPath, record)
+      } catch (error) {
+        console.error("[SyncHistory] record failed", error)
+      }
+    }
+    return result
+  }
+
+  async ensureSyncHistoryBaseline(remoteName?: string, branchName?: string): Promise<GitSyncRecord | null> {
+    const repository = this.ensureRepository()
+    const remote = remoteName || "origin"
+    const branch = branchName || await repository.getCurrentBranch()
+    if (!branch) return null
+    const remoteBranch = (await repository.listRemoteBranches(remote)).find((item) => item.name === branch)
+    if (!remoteBranch || !remoteBranch.oid) return null
+    const localHistory = await repository.getHistory(200)
+    if (!localHistory.some((commit) => commit.oid === remoteBranch.oid)) return null
+    return ensureBaseline(repository.projectPath, remote, branch, remoteBranch.oid)
+  }
+  async listSyncRecords(remoteName?: string, branchName?: string): Promise<GitSyncRecord[]> {
+    const repository = this.ensureRepository()
+    return readSyncRecords(repository.projectPath, remoteName, branchName)
   }
 
   /** 仅比较本地已有 commit graph 与 remote-tracking ref，不会自动 Fetch。 */

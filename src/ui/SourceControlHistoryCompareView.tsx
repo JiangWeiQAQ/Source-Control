@@ -128,7 +128,7 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
 
   const openCommitDetail = async (commit: GitCommitInfo) => {
     try {
-      const result = await Navigation.present<HistoryNavigationResult | null>(<SourceControlCommitDetailView gitService={gitService} oid={commit.oid} shortOid={commit.shortOid} />)
+      const result = await Navigation.present<HistoryNavigationResult | null>(<SourceControlCommitDetailView gitService={gitService} oid={commit.oid} shortOid={commit.shortOid} onDirtyRestore={async () => { await onChanged?.(); dismiss() }} />)
       if (isHistoryNavigationResult(result)) {
         try { await onChanged?.() } catch (callbackError) { console.error("[HistoryCompare] restore callback failed", callbackError) }
         dismiss(result)

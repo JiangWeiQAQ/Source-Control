@@ -20,6 +20,7 @@ export interface SourceControlCommitDetailViewProps {
   oid: string
   shortOid?: string
   onCommitReverted?: () => Promise<void>
+  onDirtyRestore?: () => Promise<void>
   readOnly?: boolean
 }
 
@@ -84,6 +85,7 @@ export function SourceControlCommitDetailView({
   oid,
   shortOid,
   onCommitReverted,
+  onDirtyRestore,
   readOnly = false,
 }: SourceControlCommitDetailViewProps) {
   const dismiss = Navigation.useDismiss()
@@ -93,6 +95,7 @@ export function SourceControlCommitDetailView({
   const [restoreErrorMessage, setRestoreErrorMessage] = useState<string | null>(null)
   const [restoreErrorDetail, setRestoreErrorDetail] = useState<string | null>(null)
   const [restoreOperation, setRestoreOperation] = useState<"restoring" | "resetting" | null>(null)
+  const [dirtyRestoreBlocked, setDirtyRestoreBlocked] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   const loadDetail = async () => {
@@ -119,6 +122,7 @@ export function SourceControlCommitDetailView({
     setRestoreErrorTitle(null)
     setRestoreErrorMessage(null)
     setRestoreErrorDetail(null)
+    setDirtyRestoreBlocked(false)
     const selected = await Dialog.actionSheet({
       title: "恢复方式",
       message: `恢复目标：${detail.shortOid}\n\n保存为最新版本（推荐）\n使用该历史版本的文件内容恢复工作区。\n当前版本和全部历史都会保留。\n恢复后请填写版本说明并保存为新的本地版本。\n\n直接回退（高级）\n将本地分支直接回退到此 Commit。\n此 Commit 之后的版本将不再属于当前分支历史。`,
@@ -159,8 +163,9 @@ export function SourceControlCommitDetailView({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         const isDirty = message.includes("Working tree must be clean before restoring a historical version.") || message.includes("当前工作区必须干净") || message.includes("DIRTY_WORKTREE")
-        setRestoreErrorMessage(isDirty ? "当前还有暂存、未暂存或未跟踪的改动。\n请先保存或处理这些改动，再恢复历史版本。" : "无法恢复版本")
-        setRestoreErrorDetail(message)
+        setRestoreErrorMessage(isDirty ? "当前改动尚未保存\n恢复历史版本前，需要先保存或处理当前改动。" : "无法恢复版本")
+        setDirtyRestoreBlocked(isDirty)
+        setRestoreErrorDetail(isDirty ? `当前目标：${detail.shortOid} · ${detail.message || "No commit message"}\n${message}` : message)
       } finally {
         setRestoreOperation(null)
       }
@@ -228,6 +233,20 @@ export function SourceControlCommitDetailView({
     } finally {
       setRestoreOperation(null)
     }
+  }
+
+  const returnToSaveChanges = async () => {
+    try {
+      await onDirtyRestore?.()
+    } catch (callbackError) {
+      console.error("[CommitDetail] dirty restore callback failed", callbackError)
+    }
+    try {
+      await onCommitReverted?.()
+    } catch (callbackError) {
+      console.error("[CommitDetail] save navigation callback failed", callbackError)
+    }
+    dismiss({ restoreBlocked: true, targetOid: detail?.oid, targetShortOid: detail?.shortOid, targetMessage: detail?.message })
   }
 
   const title = shortOid || (detail ? detail.shortOid : "Commit Detail")
@@ -348,11 +367,11 @@ export function SourceControlCommitDetailView({
                 <Text font="footnote" foregroundStyle="secondaryLabel">
                   {restoreErrorMessage}
                 </Text>
-                {restoreErrorDetail ? (
-                  <Text font="caption2" foregroundStyle="tertiaryLabel">
-                    {restoreErrorDetail}
-                  </Text>
-                ) : null}
+                {restoreErrorDetail ? <Text font="caption2" foregroundStyle="tertiaryLabel">{restoreErrorDetail}</Text> : null}
+                {dirtyRestoreBlocked ? <>
+                  <Button title="返回并保存当前改动" systemImage="arrow.uturn.backward.circle" buttonStyle="borderedProminent" action={returnToSaveChanges} />
+                  <Button title="取消" buttonStyle="borderless" action={() => { setDirtyRestoreBlocked(false); setRestoreErrorMessage(null); setRestoreErrorDetail(null) }} />
+                </> : null}
               </VStack>
             </Section>
           ) : null}

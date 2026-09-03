@@ -2,7 +2,6 @@ import { Button, HStack, Image, List, Navigation, ProgressView, Section, Spacer,
 import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo } from "../core/types"
 import { CloseButton } from "./CloseButton"
 import { GitService } from "../core/GitService"
-import { SourceControlHistoryCompareView } from "./SourceControlHistoryCompareView"
 import { useTranslator } from "./useLocalization"
 
 export interface SourceControlRemoteViewProps {
@@ -78,10 +77,6 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     }
   }
 
-  const openHistoryCompare = async () => {
-    await Navigation.present(<SourceControlHistoryCompareView gitService={gitService} onChanged={onChanged} />)
-  }
-
   const syncStateMessage = (sync: GitAheadBehind | null): string => {
     if (!sync) return t("repositoryInspection")
     if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) return t("divergedMessage")
@@ -89,6 +84,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     if (sync.ahead > 0) return t("localVersionsWaiting").replace("{count}", String(sync.ahead))
     return t("syncedToGithub")
   }
+
   const fetchLatestState = async (remoteName: string): Promise<RemoteState> => {
     await gitService.fetchRemote(remoteName)
     const latest = await readState(remoteName)
@@ -195,14 +191,13 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
 
   const syncContent = () => {
     if (!state.sync) {
-      if (state.branches.length === 0 && state.hasLocalCommit) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("emptyGithubRepository")}</Text><Button title={activeOperation === "push" ? t("pushing") : t("initialUploadToGithub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
+      if (state.branches.length === 0 && state.hasLocalCommit) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("emptyGithubRepository")}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
       return <Text font="headline">{state.branches.length === 0 ? t("emptyGithubRepository") : t("repositoryInspection")}</Text>
     }
-    const sync = state.sync
-    if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><VStack spacing={2} alignment="leading"><Text font="footnote" foregroundStyle="secondaryLabel">{t("localVersionsWaiting").replace("{count}", String(sync.ahead))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("githubHasNewerVersions").replace("{count}", String(sync.behind))}</Text></VStack><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text><HStack spacing={8}><Button title={t("historyCompare")} systemImage="rectangle.split.2x1" buttonStyle="borderedProminent" disabled={busy} action={openHistoryCompare} />{onOpenSettings ? <Button title={t("githubSettings")} systemImage="gearshape" buttonStyle="bordered" disabled={busy} action={onOpenSettings} /> : null}</HStack></VStack>
-    if (sync.ahead === 0 && sync.behind > 0) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("githubHasNewerVersions").replace("{count}", String(sync.behind))}</Text><Button title={activeOperation === "pull" ? t("pulling") : t("pullCloudVersion")} buttonStyle="borderedProminent" disabled={busy} action={pullRemote} /></VStack>
-    if (sync.ahead === 0 && sync.behind === 0) return <Text font="headline">✓ {t("syncedToGithub")}</Text>
-    return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(sync.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
+    if (state.sync.diverged || (state.sync.ahead > 0 && state.sync.behind > 0)) return <VStack spacing={4} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text></VStack>
+    if (state.sync.ahead === 0 && state.sync.behind > 0) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("githubHasNewerVersions").replace("{count}", String(state.sync.behind))}</Text><Button title={activeOperation === "pull" ? t("pulling") : t("pullCloudVersion")} buttonStyle="borderedProminent" disabled={busy} action={pullRemote} /></VStack>
+    if (state.sync.ahead === 0 && state.sync.behind === 0) return <Text font="headline">✓ {t("syncedToGithub")}</Text>
+    return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
   }
 
   return <List navigationTitle={t("manageGithubSync")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || busy} action={() => reloadRemoteState(selectedRemote?.name)} /> }}>

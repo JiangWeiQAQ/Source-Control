@@ -78,7 +78,7 @@ export interface GitSyncRecord {
   previousRemoteOid?: string
   syncedAt: number
   commitsUploaded: number
-  kind?: "push" | "baseline"
+  kind?: "push" | "baseline" | "force-push"
 }
 export interface GitAheadBehind {
   localBranch: string
@@ -322,7 +322,7 @@ export interface IsomorphicGitAdapter {
   readObject(options: { fs: unknown; dir: string; gitdir: string; oid: string; format?: "parsed" | "content" }): Promise<{ oid: string; type: string; object: Uint8Array }>
   getConfig(options: { fs: unknown; dir: string; gitdir: string; path: string }): Promise<string | undefined>
   fetch(options: { fs: unknown; dir: string; gitdir: string; remote: string; http: IsomorphicGitHttpClient; singleBranch?: boolean; onAuth?: () => { username: string; password: string } | void }): Promise<void>
-  push(options: { fs: unknown; dir: string; gitdir: string; remote: string; ref: string; remoteRef: string; http: IsomorphicGitHttpClient; force: false; onAuth?: () => { username: string; password: string } | void }): Promise<void>
+  push(options: { fs: unknown; dir: string; gitdir: string; remote: string; ref: string; remoteRef: string; http: IsomorphicGitHttpClient; force: boolean; onAuth?: () => { username: string; password: string } | void }): Promise<void>
   listRemotes(options: { fs: unknown; dir: string; gitdir: string }): Promise<Array<{ remote: string; url: string }>>
   addRemote(options: { fs: unknown; dir: string; gitdir: string; remote: string; url: string }): Promise<void>
   deleteRemote(options: { fs: unknown; dir: string; gitdir: string; remote: string }): Promise<void>

@@ -537,6 +537,40 @@ export class GitRepository {
     }
   }
 
+  /** 明确以本地 HEAD 覆盖远端分支；仅由 GitService 危险 facade 调用。 */
+  async forcePushLocalToRemote(remoteName = "origin", branchName?: string): Promise<{ remote: string; branch: string; pushed: boolean; localOid: string; previousRemoteOid: string | null }> {
+    const remote = validateRemoteName(remoteName)
+    const remoteInfo = (await this.listRemotes()).find((item) => item.name === remote)
+    if (!remoteInfo) throw new GitSafetyError(`Remote 不存在: "${remote}"`, "REMOTE_NOT_FOUND", { name: remote })
+    if (!/^https:\/\//i.test(remoteInfo.url)) throw new GitSafetyError("SSH remotes are not supported yet.", "PUSH_SSH_UNSUPPORTED", { name: remote })
+    const branch = branchName?.trim() || await this.getCurrentBranch()
+    if (!branch) throw new GitSafetyError("Force Push requires a local branch.", "FORCE_PUSH_DETACHED_HEAD")
+    const localRef = `refs/heads/${branch}`
+    let localOid: string
+    try {
+      localOid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: localRef })
+    } catch {
+      throw new GitSafetyError("Cannot push an unborn branch.", "PUSH_UNBORN_BRANCH", { branch })
+    }
+    const remoteRef = `refs/remotes/${remote}/${branch}`
+    let previousRemoteOid: string | null = null
+    try {
+      previousRemoteOid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: remoteRef })
+    } catch {
+      previousRemoteOid = null
+    }
+    const credential = await this.getRemoteCredential(remote)
+    try {
+      await this.git.push({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, remote, ref: localRef, remoteRef: localRef, http: createFetchHttpClient(), force: true, onAuth: credential ? () => credential : undefined })
+      await this.git.writeRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: remoteRef, value: localOid, force: true })
+      return { remote, branch, pushed: true, localOid, previousRemoteOid }
+    } catch (error) {
+      if (error instanceof GitSafetyError) throw error
+      const message = sanitizeRemoteErrorMessage(error)
+      throw new Error(/auth|401|403|unauthor|permission denied|forbidden/i.test(message) ? "Authentication or authorization failed" : /network|fetch|enotfound|timed out|offline|internet|无法连接服务器|http error/i.test(message) ? "Network failed" : "Force Push failed")
+    }
+  }
+
   /** 仅基于本地 commit graph 与 remote-tracking ref 计算 ahead/behind，不联网。 */
   async getAheadBehind(remoteName = "origin", branchName?: string): Promise<GitAheadBehind> {
     const remote = validateRemoteName(remoteName)

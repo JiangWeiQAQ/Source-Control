@@ -10,7 +10,7 @@ export interface SourceControlRemoteViewProps {
   onOpenSettings?: () => Promise<void>
 }
 
-type ActiveOperation = "push" | "pull" | null
+type ActiveOperation = "push" | "pull" | "force-push" | null
 type RemoteState = {
   remotes: GitRemoteInfo[]
   selected: GitRemoteInfo | null
@@ -172,6 +172,32 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     }
   }
 
+  const forcePushLocal = async () => {
+    if (!selectedRemote || !state.branch || busy || !state.sync || state.sync.ahead === 0 || state.sync.behind === 0) return
+    const latest = await fetchLatestState(selectedRemote.name)
+    const sync = latest.sync
+    if (!sync || sync.ahead === 0 || sync.behind === 0 || !sync.localOid || !sync.remoteOid) {
+      setErrorMessage(syncStateMessage(sync))
+      return
+    }
+    const firstConfirmed = await Dialog.confirm({ title: "以本地版本为准？", message: "GitHub 上当前分支的独立版本将被本地历史替换。\n\n本地版本不会删除。", cancelLabel: t("cancel"), confirmLabel: "继续" })
+    if (!firstConfirmed) return
+    const secondConfirmed = await Dialog.confirm({ title: "确认覆盖 GitHub？", message: `GitHub 当前：${sync.remoteOid.slice(0, 7)}\n本地当前：${sync.localOid.slice(0, 7)}\n\n此操作会重写 GitHub 分支历史。`, cancelLabel: t("cancel"), confirmLabel: "覆盖 GitHub" })
+    if (!secondConfirmed) return
+    setActiveOperation("force-push")
+    setErrorMessage(null)
+    try {
+      await gitService.forcePushLocalToRemote(selectedRemote.name, latest.branch || state.branch)
+      const refreshed = await fetchLatestState(selectedRemote.name)
+      setState(refreshed)
+      await notifyChanged()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveOperation(null)
+    }
+  }
+
   const pullRemote = async () => {
     if (!selectedRemote || !state.branch || busy) return
     setActiveOperation("pull")
@@ -194,7 +220,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
       if (state.branches.length === 0 && state.hasLocalCommit) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("emptyGithubRepository")}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
       return <Text font="headline">{state.branches.length === 0 ? t("emptyGithubRepository") : t("repositoryInspection")}</Text>
     }
-    if (state.sync.diverged || (state.sync.ahead > 0 && state.sync.behind > 0)) return <VStack spacing={4} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text></VStack>
+    if (state.sync.diverged || (state.sync.ahead > 0 && state.sync.behind > 0)) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("githubHasNewerVersions").replace("{count}", String(state.sync.behind))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text><Button title={activeOperation === "force-push" ? t("pushing") : t("forcePushLocal")} systemImage="exclamationmark.triangle" buttonStyle="borderedProminent" disabled={busy} action={forcePushLocal} /></VStack>
     if (state.sync.ahead === 0 && state.sync.behind > 0) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("githubHasNewerVersions").replace("{count}", String(state.sync.behind))}</Text><Button title={activeOperation === "pull" ? t("pulling") : t("pullCloudVersion")} buttonStyle="borderedProminent" disabled={busy} action={pullRemote} /></VStack>
     if (state.sync.ahead === 0 && state.sync.behind === 0) return <Text font="headline">✓ {t("syncedToGithub")}</Text>
     return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>

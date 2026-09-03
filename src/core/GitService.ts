@@ -471,6 +471,42 @@ export class GitService {
     return result
   }
 
+  /** 明确以本地 HEAD 覆盖远端分支；仅用于用户二次确认后的危险操作。 */
+  async forcePushLocalToRemote(remoteName = "origin", branchName?: string): Promise<{ pushed: boolean; localOid: string; previousRemoteOid?: string }> {
+    const repository = this.ensureRepository()
+    const remote = remoteName || "origin"
+    const branch = branchName || await repository.getCurrentBranch()
+    if (!branch) throw new GitSafetyError("Force Push requires a local branch.", "FORCE_PUSH_DETACHED_HEAD")
+    const status = await repository.getStatus()
+    if (!status.isClean) throw new GitSafetyError("Working tree must be clean before replacing GitHub history.", "FORCE_PUSH_DIRTY_WORKTREE")
+    const comparison = await repository.getAheadBehind(remote, branch)
+    if (comparison.localOid === null) throw new GitSafetyError("Cannot replace GitHub history from an unborn branch.", "PUSH_UNBORN_BRANCH", { branch })
+    if (comparison.remoteOid === null) return { pushed: false, localOid: comparison.localOid }
+    if (comparison.ahead === 0 && comparison.behind === 0) return { pushed: false, localOid: comparison.localOid, previousRemoteOid: comparison.remoteOid }
+    if (!comparison.diverged && comparison.ahead === 0) throw new GitSafetyError("Force Push requires local commits that replace the remote branch.", "FORCE_PUSH_NOT_LOCAL_AHEAD", { remote, branch })
+    const result = await repository.forcePushLocalToRemote(remote, branch)
+    if (result.pushed) {
+      const commitsUploaded = comparison.ahead
+      const record: GitSyncRecord = {
+        id: `${Date.now()}-${result.localOid}-force-push`,
+        remoteName: result.remote,
+        branchName: result.branch,
+        targetOid: result.localOid,
+        ...(result.previousRemoteOid ? { previousRemoteOid: result.previousRemoteOid } : {}),
+        syncedAt: Math.floor(Date.now() / 1000),
+        commitsUploaded,
+        kind: "force-push",
+      }
+      try {
+        await recordSync(repository.projectPath, record)
+      } catch (error) {
+        console.error("[SyncHistory] force-push record failed", error)
+      }
+    }
+    return { pushed: result.pushed, localOid: result.localOid, ...(result.previousRemoteOid ? { previousRemoteOid: result.previousRemoteOid } : {}) }
+  }
+
+
   async ensureSyncHistoryBaseline(remoteName?: string, branchName?: string): Promise<GitSyncRecord | null> {
     const repository = this.ensureRepository()
     const remote = remoteName || "origin"

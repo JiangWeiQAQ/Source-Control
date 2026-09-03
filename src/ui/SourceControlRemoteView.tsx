@@ -77,15 +77,57 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     }
   }
 
+  const syncStateMessage = (sync: GitAheadBehind | null): string => {
+    if (!sync) return t("repositoryInspection")
+    if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) return t("divergedMessage")
+    if (sync.behind > 0) return t("githubHasNewerVersions").replace("{count}", String(sync.behind))
+    if (sync.ahead > 0) return t("localVersionsWaiting").replace("{count}", String(sync.ahead))
+    return t("syncedToGithub")
+  }
+
+  const fetchLatestState = async (remoteName: string): Promise<RemoteState> => {
+    await gitService.fetchRemote(remoteName)
+    const latest = await readState(remoteName)
+    setState(latest)
+    return latest
+  }
+
   const pushBranch = async (remoteName: string, branch: string) => {
     setActiveOperation("push")
     setErrorMessage(null)
     try {
+      const latest = await fetchLatestState(remoteName)
+      const sync = latest.sync
+      if (latest.branches.length > 0 && sync) {
+        if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) {
+          setErrorMessage(`${t("divergedMessage")}\n${syncStateMessage(sync)}`)
+          return
+        }
+        if (sync.ahead === 0 && sync.behind > 0) {
+          setErrorMessage(`${t("githubHasNewerVersions").replace("{count}", String(sync.behind))}\n${t("pullCloudVersion")}`)
+          return
+        }
+        if (sync.ahead === 0 && sync.behind === 0) {
+          setErrorMessage(t("syncedToGithub"))
+          return
+        }
+      }
       await gitService.pushRemote(remoteName, branch)
       setState(await readState(remoteName))
       await notifyChanged()
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
+      const message = error instanceof Error ? error.message : String(error)
+      if (/remote changed|non-fast-forward|not a simple fast-forward|fast-forward/i.test(message)) {
+        try {
+          const latest = await fetchLatestState(remoteName)
+          setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.sync)}`)
+          await notifyChanged()
+        } catch (refreshError) {
+          setErrorMessage(refreshError instanceof Error ? refreshError.message : String(refreshError))
+        }
+      } else {
+        setErrorMessage(message)
+      }
     } finally {
       setActiveOperation(null)
     }
@@ -93,15 +135,41 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
 
   const syncToGithub = async () => {
     if (!selectedRemote || !state.branch || busy || !state.hasLocalCommit) return
-    if (state.branches.length > 0 && (!state.sync || state.sync.ahead === 0 || state.sync.behind > 0 || state.sync.diverged)) return
-    const confirmed = await Dialog.confirm({
-      title: t("syncToGitHub"),
-      message: `${t("repository")}：${selectedRemote.name}\n${t("branch")}：${state.branch}`,
-      cancelLabel: t("cancel"),
-      confirmLabel: t("sync"),
-    })
-    if (!confirmed) return
-    await pushBranch(selectedRemote.name, state.branch)
+    setActiveOperation("push")
+    setErrorMessage(null)
+    try {
+      const latest = await fetchLatestState(selectedRemote.name)
+      const sync = latest.sync
+      if (latest.branches.length > 0 && sync && (sync.ahead === 0 || sync.behind > 0 || sync.diverged)) {
+        setErrorMessage(syncStateMessage(sync))
+        return
+      }
+      const confirmed = await Dialog.confirm({
+        title: t("syncToGitHub"),
+        message: `${t("repository")}：${selectedRemote.name}\n${t("branch")}：${latest.branch || state.branch}`,
+        cancelLabel: t("cancel"),
+        confirmLabel: t("sync"),
+      })
+      if (!confirmed) return
+      await gitService.pushRemote(selectedRemote.name, latest.branch || state.branch)
+      setState(await readState(selectedRemote.name))
+      await notifyChanged()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/remote changed|non-fast-forward|not a simple fast-forward|fast-forward/i.test(message)) {
+        try {
+          const latest = await fetchLatestState(selectedRemote.name)
+          setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.sync)}`)
+          await notifyChanged()
+        } catch (refreshError) {
+          setErrorMessage(refreshError instanceof Error ? refreshError.message : String(refreshError))
+        }
+      } else {
+        setErrorMessage(message)
+      }
+    } finally {
+      setActiveOperation(null)
+    }
   }
 
   const pullRemote = async () => {
@@ -109,7 +177,9 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     setActiveOperation("pull")
     setErrorMessage(null)
     try {
-      await gitService.pullRemote(selectedRemote.name, state.branch)
+      const latest = await fetchLatestState(selectedRemote.name)
+      if (!latest.sync || latest.sync.ahead > 0 || latest.sync.diverged || latest.sync.behind === 0) return
+      await gitService.pullRemote(selectedRemote.name, latest.branch || state.branch)
       setState(await readState(selectedRemote.name))
       await notifyChanged()
     } catch (error) {

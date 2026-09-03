@@ -233,18 +233,22 @@ export class GitHubReleaseService {
     return metadata.version
   }
 
-  async publishCurrentProject(): Promise<GitHubReleaseResult> {
+  async publishCurrentProject(options?: { version?: string; releaseNotes?: string }): Promise<GitHubReleaseResult> {
     await this.gitService.openRepository(this.projectPath)
     const preflight = await this.preflight()
     const metadata = await this.readProjectMetadata()
     if (!metadata) throw new Error("Project version is missing.")
 
-    const tagName = `v${metadata.version}`
-    const assetName = `${slugify(metadata.name)}-${metadata.version}.zip`
+    const requestedVersion = options?.version?.trim()
+    const version = requestedVersion || metadata.version
+    const releaseNotes = options?.releaseNotes?.trim() || `版本 ${version}`
+
+    const tagName = `v${version}`
+    const assetName = `${slugify(metadata.name)}-${version}.zip`
     const releasedAt = Math.floor(Date.now() / 1000)
     const manifest: GitHubReleaseManifest = {
       name: metadata.name,
-      version: metadata.version,
+      version,
       commitOid: preflight.commitOid,
       releasedAt,
       minimumScriptingVersion: null,
@@ -255,11 +259,11 @@ export class GitHubReleaseService {
     try {
       const zipPath = await this.createZip(runDirectory, assetName, manifest, preflight.token)
       const zipBytes = await FileManager.readAsBytes(zipPath)
-      const release = await this.findOrCreateRelease(preflight.repository, preflight.token, tagName, `${metadata.name} ${metadata.version}`, preflight.commitOid)
+      const release = await this.findOrCreateRelease(preflight.repository, preflight.token, tagName, `${metadata.name} ${version}`, preflight.commitOid, releaseNotes)
       const existingAsset = release.assets.find((asset) => asset.name === assetName)
       if (existingAsset) {
         return {
-          version: metadata.version,
+          version,
           tagName,
           releaseId: release.id,
           releaseUrl: release.releaseUrl,
@@ -281,7 +285,7 @@ export class GitHubReleaseService {
         throw new Error("ZIP upload failed for the existing GitHub Release.")
       }
       return {
-        version: metadata.version,
+        version,
         tagName,
         releaseId: release.id,
         releaseUrl: release.releaseUrl,
@@ -408,6 +412,7 @@ export class GitHubReleaseService {
     tagName: string,
     title: string,
     targetCommitish: string,
+    body: string,
   ): Promise<ReleaseRecord & { wasCreated: boolean }> {
     const existingResponse = await this.requestRelease(`${this.apiBase(repository)}/releases/tags/${encodeURIComponent(tagName)}`, token, "GET")
     if (existingResponse.status !== 404) {
@@ -417,7 +422,7 @@ export class GitHubReleaseService {
       return { ...existing, wasCreated: false }
     }
 
-    const payload = JSON.stringify({ tag_name: tagName, target_commitish: targetCommitish, name: title, body: "" })
+    const payload = JSON.stringify({ tag_name: tagName, target_commitish: targetCommitish, name: title, body })
     const createdResponse = await this.requestRelease(`${this.apiBase(repository)}/releases`, token, "POST", payload)
     if (!createdResponse.ok) throw safeApiError(createdResponse.status)
     const created = parseRelease(await createdResponse.json())

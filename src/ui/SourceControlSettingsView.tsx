@@ -3,6 +3,7 @@ import { GitHubReleaseService } from "../core/GitHubReleaseService"
 import { GitHubReleaseResult, GitAheadBehind, GitRemoteBranch, GitRemoteInfo, GitRepositoryStatus } from "../core/types"
 import { GitService } from "../core/GitService"
 import { CloseButton } from "./CloseButton"
+import { SourceControlReleaseView } from "./SourceControlReleaseView"
 import { AppLanguage, LanguagePreference, getLanguagePreference, setLanguagePreference } from "./localization"
 import { useTranslator } from "./useLocalization"
 
@@ -276,30 +277,12 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     loadVersion().catch(console.error)
   }, [gitService, projectPath])
 
-  const publishRelease = async () => {
+  const openReleaseSettings = async () => {
     if (!gitService || !projectPath || busy) return
-    setOperation("release")
-    setErrorMessage(null)
     try {
-      const version = await new GitHubReleaseService(gitService, projectPath).getProjectVersion()
-      setReleaseVersion(version)
-      setReleaseVersionError(null)
-      const confirmed = await Dialog.confirm({
-        title: t("publishReleaseConfirmTitle").replace("{version}", version),
-        message: t("publishReleaseConfirmMessage"),
-        cancelLabel: t("cancel"),
-        confirmLabel: t("publishRelease"),
-      })
-      if (!confirmed) return
-      setReleaseResult(null)
-      const result = await new GitHubReleaseService(gitService, projectPath).publishCurrentProject()
-      setReleaseResult(result)
+      await Navigation.present(<SourceControlReleaseView gitService={gitService} projectPath={projectPath} />)
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      setReleaseVersionError(message.includes("Project version is missing") ? message : releaseVersionError)
-      setErrorMessage(message)
-    } finally {
-      setOperation(null)
+      setErrorMessage(error instanceof Error ? error.message : String(error))
     }
   }
 
@@ -376,19 +359,14 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       ) : null}
 
       {gitService && projectPath ? <Section header={<Text>{t("release")}</Text>}>
-        <VStack spacing={6} alignment="leading">
-          <HStack spacing={8} alignment="center">
+        <Button action={openReleaseSettings} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }} disabled={busy}>
+          <HStack spacing={8} alignment="center" frame={{ maxWidth: "infinity", minHeight: 58, alignment: "leading" }}>
             <Image systemName="shippingbox" foregroundStyle="blue" />
-            <VStack spacing={2} alignment="leading">
-              <Text font="subheadline">{t("publishRelease")}</Text>
-              <Text font="caption" foregroundStyle={releaseVersionError ? "red" : "secondaryLabel"} lineLimit={2}>{releaseVersionError || (releaseVersion ? `${t("releaseVersion")} · ${releaseVersion} · ${releaseResult ? t("releasePublished") : t("releaseNotPublished")}` : t("releaseNotPublished"))}</Text>
-            </VStack>
+            <VStack spacing={2} alignment="leading"><Text font="subheadline">{t("publishRelease")}</Text><Text font="caption" foregroundStyle="secondaryLabel" lineLimit={1}>{releaseVersion ? `${t("releaseVersion")} · ${releaseVersion}` : t("releaseNotPublished")}</Text></VStack>
             <Spacer />
-            {operation === "release" ? <ProgressView /> : <Image systemName="chevron.right" foregroundStyle="secondaryLabel" />}
+            <Image systemName="chevron.right" foregroundStyle="secondaryLabel" />
           </HStack>
-          <Text font="footnote" foregroundStyle="secondaryLabel">{t("publishReleaseHint")}</Text>
-          <Button title={t("publishRelease")} systemImage="arrow.up.circle" buttonStyle="borderedProminent" disabled={busy || !releaseVersion} action={publishRelease} />
-        </VStack>
+        </Button>
       </Section> : null}
 
       {gitService && projectPath && releaseResult ? <Section header={<Text>{t("releasePublished")}</Text>}>

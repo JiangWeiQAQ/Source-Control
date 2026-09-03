@@ -1,4 +1,4 @@
-export * from "./ChangeRow"
+export * from "./CloseButton"
 export * from "./HistoryRow"
 export * from "./ProjectList"
 export * from "./SourceControlChangesView"

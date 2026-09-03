@@ -21,6 +21,7 @@ import { SourceControlRemoteView } from "./SourceControlRemoteView"
 import { SourceControlSettingsView } from "./SourceControlSettingsView"
 import { SourceControlHistoryCompareView } from "./SourceControlHistoryCompareView"
 import { AppLanguage, formatChangeType } from "./localization"
+import { CloseButton } from "./CloseButton"
 import { enumerateProjectFiles, ProjectFileEntry } from "./projectFiles"
 import { useTranslator } from "./useLocalization"
 
@@ -119,7 +120,7 @@ export function SourceControlChangesView({ gitService: propGitService, projectPa
 
   const openSettings = async () => {
     try {
-      await Navigation.present(<SourceControlSettingsView gitService={service} onLanguageChanged={refreshLanguage} onRemoteChanged={loadStatus} />)
+      await Navigation.present(<SourceControlSettingsView gitService={service} projectPath={projectPath} onLanguageChanged={refreshLanguage} onRemoteChanged={loadStatus} />)
       await loadStatus()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -154,9 +155,7 @@ export function SourceControlChangesView({ gitService: propGitService, projectPa
 
   return <VStack spacing={0} alignment="leading" frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
     <HStack frame={{ maxWidth: "infinity", minHeight: 52, alignment: "center" }} padding={{ horizontal: 4, vertical: 4 }} background="clear">
-      <Button action={() => dismiss()} buttonStyle="borderless" contentShape={{ kind: "interaction", shape: "rect" }}>
-        <HStack frame={{ width: 44, height: 44, alignment: "center" }}><Image systemName="xmark" /></HStack>
-      </Button>
+       <CloseButton />
       <Spacer />
       <HeaderIconButton systemImage="gearshape" onPress={openSettings} />
     </HStack>

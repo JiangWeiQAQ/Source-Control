@@ -13,6 +13,7 @@ import {
 } from "scripting"
 import { GitService } from "../core/GitService"
 import { GitCommitChangedFile, GitCommitDetail } from "../core/types"
+import { CloseButton } from "./CloseButton"
 
 export interface SourceControlCommitDetailViewProps {
   gitService: GitService
@@ -235,6 +236,7 @@ export function SourceControlCommitDetailView({
     <List
       navigationTitle={title}
       toolbar={{
+        topBarLeading: <CloseButton />,
         topBarTrailing: (
           <Button
             title="Done"

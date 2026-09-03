@@ -17,6 +17,7 @@ import {
 import { GitService } from "../core/GitService"
 import { SourceControlChangesView } from "./SourceControlChangesView"
 import { SourceControlSettingsView } from "./SourceControlSettingsView"
+import { CloseButton } from "./CloseButton"
 import { useTranslator } from "./useLocalization"
 
 interface ManagedProject {
@@ -164,7 +165,7 @@ function AddProjectView({
     <List
       navigationTitle="Add Project"
       toolbar={{
-        topBarLeading: <Button title="Close" systemImage="xmark" action={() => dismiss()} />,
+        topBarLeading: <CloseButton />,
       }}
     >
       {errorMessage ? <Section><Text foregroundStyle="red">{errorMessage}</Text></Section> : null}
@@ -259,7 +260,7 @@ export function SourceControlProjectPickerView() {
       navigationTitle={t("sourceControl")}
       navigationSubtitle={t("beta")}
       toolbar={{
-        topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => Navigation.useDismiss()()} />,
+        topBarLeading: <CloseButton />,
         topBarTrailing: (
           <HStack spacing={8}>
             <Button title={t("settings")} systemImage="gearshape" buttonStyle="borderless" action={async () => {

@@ -11,8 +11,9 @@ import {
   useState,
   VStack,
 } from "scripting"
-import { GitService } from "../core/GitService"
+import { CloseButton } from "./CloseButton"
 import { GitCommitInfo } from "../core/types"
+import { GitService } from "../core/GitService"
 import { AppLanguage, createTranslator } from "./localization"
 import { HistoryRow } from "./HistoryRow"
 import { SourceControlCommitDetailView } from "./SourceControlCommitDetailView"
@@ -68,7 +69,7 @@ export function SourceControlHistoryView({ gitService, projectPath, language = "
     <List
       navigationTitle={t("historyTitle")}
       toolbar={{
-        topBarLeading: <Button title={t("close")} action={() => dismiss()} />,
+        topBarLeading: <CloseButton />,
         topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading} action={loadHistory} />,
       }}
     >

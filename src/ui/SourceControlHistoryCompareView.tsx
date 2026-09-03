@@ -2,6 +2,7 @@ import { Button, Divider, HStack, Image, List, Navigation, ProgressView, Section
 import { GitBranchResetResult, GitCommitInfo, GitCommitWorkingTreeRestoreResult, GitSyncRecord } from "../core/types"
 import { GitService } from "../core/GitService"
 import { formatHistoryTime } from "./formatDate"
+import { CloseButton } from "./CloseButton"
 import { AppLanguage, createTranslator } from "./localization"
 import { SourceControlCommitDetailView } from "./SourceControlCommitDetailView"
 
@@ -139,9 +140,7 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
 
   return <VStack spacing={0} alignment="leading" frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
     <HStack spacing={4} frame={{ maxWidth: "infinity", minHeight: 52, alignment: "center" }} padding={{ horizontal: 4, vertical: 4 }} background="clear">
-      <Button action={() => dismiss()} buttonStyle="borderless" contentShape={{ kind: "interaction", shape: "rect" }}>
-        <HStack frame={{ width: 44, height: 44, alignment: "center" }}><Image systemName="xmark" /></HStack>
-      </Button>
+      <CloseButton />
       <Spacer />
     </HStack>
     <List navigationTitle="版本对照" toolbar={{ topBarTrailing: <Button title={fetching ? t("fetching") : t("refresh")} systemImage="arrow.clockwise" disabled={loading || fetching || state === "noRemote"} action={refresh} /> }}>

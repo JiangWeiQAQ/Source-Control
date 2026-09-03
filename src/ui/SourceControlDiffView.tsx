@@ -13,6 +13,7 @@ import {
 } from "scripting"
 import { GitService } from "../core/GitService"
 import { GitChange, GitDiffLine, GitDiffResult } from "../core/types"
+import { CloseButton } from "./CloseButton"
 
 export interface SourceControlDiffViewProps {
   gitService: GitService
@@ -172,6 +173,7 @@ export function SourceControlDiffView({ gitService, change, comparison: initialC
     <List
       navigationTitle="Diff"
       toolbar={{
+        topBarLeading: <CloseButton />,
         topBarTrailing: (
           <Button
             title={primaryActionTitle}

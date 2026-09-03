@@ -1,13 +1,16 @@
 import { Button, HStack, Image, List, Navigation, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
-import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo, GitRepositoryStatus } from "../core/types"
+import { GitHubReleaseService } from "../core/GitHubReleaseService"
+import { GitHubReleaseResult, GitAheadBehind, GitRemoteBranch, GitRemoteInfo, GitRepositoryStatus } from "../core/types"
 import { GitService } from "../core/GitService"
-import { AppLanguage, getLanguagePreference, LanguagePreference, resolveLanguage, setLanguagePreference } from "./localization"
+import { CloseButton } from "./CloseButton"
+import { AppLanguage, LanguagePreference, getLanguagePreference, setLanguagePreference } from "./localization"
 import { useTranslator } from "./useLocalization"
 
 export interface SourceControlSettingsViewProps {
   onLanguageChanged?: () => void
   onRemoteChanged?: () => Promise<void>
   gitService?: GitService
+  projectPath?: string
 }
 
 type GithubSettingsState = {
@@ -21,7 +24,7 @@ type GithubSettingsState = {
   checked: boolean
 }
 
-type SettingsOperation = "remote" | "credential" | "check" | null
+type SettingsOperation = "remote" | "credential" | "check" | "release" | null
 
 const emptyGithubState: GithubSettingsState = {
   remotes: [],
@@ -64,7 +67,7 @@ function githubStatusLabel(state: GithubSettingsState, language: AppLanguage): s
   return copy(language, "已同步", "Synced")
 }
 
-export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, gitService }: SourceControlSettingsViewProps) {
+export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, gitService, projectPath }: SourceControlSettingsViewProps) {
   const dismiss = Navigation.useDismiss()
   const { t, language, refreshLanguage } = useTranslator()
   const [preference, setPreference] = useState<LanguagePreference>(getLanguagePreference())
@@ -72,6 +75,9 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const [loading, setLoading] = useState(false)
   const [operation, setOperation] = useState<SettingsOperation>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [releaseVersion, setReleaseVersion] = useState<string | null>(null)
+  const [releaseVersionError, setReleaseVersionError] = useState<string | null>(null)
+  const [releaseResult, setReleaseResult] = useState<GitHubReleaseResult | null>(null)
   const busy = operation !== null
   const selectedRemote = githubState.selected
 
@@ -250,6 +256,68 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     }
   }
 
+  useEffect(() => {
+    if (!gitService || !projectPath) {
+      setReleaseVersion(null)
+      setReleaseVersionError(null)
+      setReleaseResult(null)
+      return
+    }
+    const loadVersion = async () => {
+      try {
+        const version = await new GitHubReleaseService(gitService, projectPath).getProjectVersion()
+        setReleaseVersion(version)
+        setReleaseVersionError(null)
+      } catch (error) {
+        setReleaseVersion(null)
+        setReleaseVersionError(error instanceof Error ? error.message : String(error))
+      }
+    }
+    loadVersion().catch(console.error)
+  }, [gitService, projectPath])
+
+  const publishRelease = async () => {
+    if (!gitService || !projectPath || busy) return
+    setOperation("release")
+    setErrorMessage(null)
+    try {
+      const version = await new GitHubReleaseService(gitService, projectPath).getProjectVersion()
+      setReleaseVersion(version)
+      setReleaseVersionError(null)
+      const confirmed = await Dialog.confirm({
+        title: t("publishReleaseConfirmTitle").replace("{version}", version),
+        message: t("publishReleaseConfirmMessage"),
+        cancelLabel: t("cancel"),
+        confirmLabel: t("publishRelease"),
+      })
+      if (!confirmed) return
+      setReleaseResult(null)
+      const result = await new GitHubReleaseService(gitService, projectPath).publishCurrentProject()
+      setReleaseResult(result)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      setReleaseVersionError(message.includes("Project version is missing") ? message : releaseVersionError)
+      setErrorMessage(message)
+    } finally {
+      setOperation(null)
+    }
+  }
+
+  const openRelease = async () => {
+    if (!releaseResult) return
+    try {
+      await Safari.openURL(releaseResult.releaseUrl)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const copyReleaseAssetUrl = async () => {
+    if (!releaseResult) return
+    await Pasteboard.setString(releaseResult.assetUrl)
+    await Dialog.alert({ title: t("downloadUrlCopied"), message: "" })
+  }
+
   const chooseLanguage = async () => {
     const selected = await Dialog.actionSheet({
       title: copy(language, "语言", "Language"),
@@ -267,7 +335,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const statusLabel = githubStatusLabel(githubState, language)
 
   return (
-    <List navigationTitle={t("settings")} toolbar={{ topBarLeading: <Button title={t("close")} systemImage="xmark" action={() => dismiss()} /> }}>
+    <List navigationTitle={t("settings")} toolbar={{ topBarLeading: <CloseButton /> }}>
       <Section header={<Text>Source Control</Text>}>
         <VStack spacing={5} alignment="leading">
           <Text font="subheadline">{copy(language, "选择 → 说明 → 保存 → 同步", "Select → Explain → Save → Sync")}</Text>
@@ -307,6 +375,33 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
         </Section>
       ) : null}
 
+      {gitService && projectPath ? <Section header={<Text>{t("release")}</Text>}>
+        <VStack spacing={6} alignment="leading">
+          <HStack spacing={8} alignment="center">
+            <Image systemName="shippingbox" foregroundStyle="blue" />
+            <VStack spacing={2} alignment="leading">
+              <Text font="subheadline">{t("publishRelease")}</Text>
+              <Text font="caption" foregroundStyle={releaseVersionError ? "red" : "secondaryLabel"} lineLimit={2}>{releaseVersionError || (releaseVersion ? `${t("releaseVersion")} · ${releaseVersion} · ${releaseResult ? t("releasePublished") : t("releaseNotPublished")}` : t("releaseNotPublished"))}</Text>
+            </VStack>
+            <Spacer />
+            {operation === "release" ? <ProgressView /> : <Image systemName="chevron.right" foregroundStyle="secondaryLabel" />}
+          </HStack>
+          <Text font="footnote" foregroundStyle="secondaryLabel">{t("publishReleaseHint")}</Text>
+          <Button title={t("publishRelease")} systemImage="arrow.up.circle" buttonStyle="borderedProminent" disabled={busy || !releaseVersion} action={publishRelease} />
+        </VStack>
+      </Section> : null}
+
+      {gitService && projectPath && releaseResult ? <Section header={<Text>{t("releasePublished")}</Text>}>
+        <VStack spacing={7} alignment="leading">
+          <Text font="subheadline">{`${t("releaseVersion")} · ${releaseResult.version}`}</Text>
+          <Text font="caption" foregroundStyle="secondaryLabel">{releaseResult.assetName} · {releaseResult.assetSize} bytes · ID {releaseResult.assetId}</Text>
+          {releaseResult.existingRelease ? <Text font="caption" foregroundStyle="orange">{t("releaseAlreadyPublished").replace("{version}", releaseResult.version)}</Text> : null}
+          <HStack spacing={8}>
+            <Button title={t("viewGithubRelease")} systemImage="safari" buttonStyle="bordered" action={openRelease} />
+            <Button title={t("copyDownloadUrl")} systemImage="doc.on.doc" buttonStyle="bordered" action={copyReleaseAssetUrl} />
+          </HStack>
+        </VStack>
+      </Section> : null}
       <Section header={<Text>{copy(language, "语言", "Language")}</Text>}>
         <Button title={`${copy(language, "语言", "Language")} · ${preferenceLabel}`} systemImage="globe" action={chooseLanguage} />
       </Section>

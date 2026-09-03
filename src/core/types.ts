@@ -154,6 +154,30 @@ export interface GitBranchResetResult {
   shortOid: string
 }
 
+export interface GitHubReleaseResult {
+  version: string
+  tagName: string
+  releaseId: number
+  releaseUrl: string
+  assetId: number
+  assetName: string
+  assetUrl: string
+  assetSize: number
+  commitOid: string
+  /** Whether the tag already had a Release before this operation. */
+  existingRelease: boolean
+  /** Whether this operation uploaded the ZIP asset. */
+  assetUploaded: boolean
+}
+
+export interface GitHubReleaseManifest {
+  name: string
+  version: string
+  commitOid: string
+  releasedAt: number
+  minimumScriptingVersion: string | null
+}
+
 export interface GitSafetySnapshotInfo {
   ref: string
   oid: string

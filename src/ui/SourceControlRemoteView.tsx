@@ -1,5 +1,6 @@
 import { Button, HStack, Image, List, Navigation, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
 import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo } from "../core/types"
+import { CloseButton } from "./CloseButton"
 import { GitService } from "../core/GitService"
 import { useTranslator } from "./useLocalization"
 
@@ -129,7 +130,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
   }
 
-  return <List navigationTitle={t("manageGithubSync")} toolbar={{ topBarLeading: <Button title={t("close")} systemImage="xmark" action={() => dismiss()} />, topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || busy} action={() => reloadRemoteState(selectedRemote?.name)} /> }}>
+  return <List navigationTitle={t("manageGithubSync")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || busy} action={() => reloadRemoteState(selectedRemote?.name)} /> }}>
     {errorMessage ? <Section><VStack spacing={5} alignment="leading"><HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">{t("remoteUpdateFailed")}</Text></HStack><Text font="footnote" foregroundStyle="red">{errorMessage}</Text></VStack></Section> : null}
     {loading ? <Section><VStack spacing={10} alignment="center"><ProgressView /><Text font="footnote" foregroundStyle="secondaryLabel">{t("fetching")}</Text></VStack></Section> : null}
     {!loading && !selectedRemote ? <Section><VStack spacing={8} alignment="leading"><Text font="headline">{t("notConnected")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("noRemoteHint")}</Text></VStack></Section> : null}

@@ -14,6 +14,7 @@ import {
 } from "scripting"
 import { GitService } from "../core/GitService"
 import { GitSafetySnapshotInfo } from "../core/types"
+import { CloseButton } from "./CloseButton"
 import { formatHistoryTime } from "./formatDate"
 
 export interface SourceControlSnapshotsViewProps {
@@ -105,7 +106,7 @@ export function SourceControlSnapshotsView({
     <List
       navigationTitle="Safety Snapshots"
       toolbar={{
-        topBarLeading: <Button title="Close" systemImage="xmark" buttonStyle="borderless" action={() => dismiss()} />,
+        topBarLeading: <CloseButton />,
         topBarTrailing: (
           <HStack spacing={12}>
             <Button

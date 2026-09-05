@@ -3,6 +3,7 @@ import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo } from "../core/types"
 import { CloseButton } from "./CloseButton"
 import { GitService } from "../core/GitService"
 import { useTranslator } from "./useLocalization"
+import { useUISettings } from "./useUISettings"
 
 export interface SourceControlRemoteViewProps {
   gitService: GitService
@@ -31,6 +32,7 @@ const emptyState: RemoteState = {
 
 export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings }: SourceControlRemoteViewProps) {
   const { t } = useTranslator()
+  const { tokens } = useUISettings()
   const dismiss = Navigation.useDismiss()
   const [state, setState] = useState<RemoteState>(emptyState)
   const [loading, setLoading] = useState(true)
@@ -237,7 +239,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
           {syncContent()}
         </VStack>
       </Section>
-      {onOpenSettings ? <Section><Button action={onOpenSettings} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}><HStack spacing={8} alignment="center" frame={{ maxWidth: "infinity", minHeight: 52, alignment: "leading" }}><Image systemName="gearshape" foregroundStyle="secondaryLabel" /><VStack spacing={2} alignment="leading"><Text font="subheadline">{t("githubSettings")}</Text><Text font="caption" foregroundStyle="secondaryLabel">{t("githubSettingsHint")}</Text></VStack><Spacer /><Image systemName="chevron.right" foregroundStyle="secondaryLabel" /></HStack></Button></Section> : null}
+      {onOpenSettings ? <Section><Button action={onOpenSettings} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}><HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.rowHeight, alignment: "leading" }}><Image systemName="gearshape" foregroundStyle="secondaryLabel" /><VStack spacing={2} alignment="leading"><Text font="subheadline">{t("githubSettings")}</Text><Text font="caption" foregroundStyle="secondaryLabel">{t("githubSettingsHint")}</Text></VStack><Spacer /><Image systemName="chevron.right" foregroundStyle="secondaryLabel" /></HStack></Button></Section> : null}
     </> : null}
     {!loading && !selectedRemote && onOpenSettings ? <Section><Button action={onOpenSettings} buttonStyle="borderedProminent" title={t("githubSettings")} /></Section> : null}
   </List>

@@ -1,8 +1,41 @@
 {
-  "name": "Source Control",
-  "icon": "arrow.triangle.branch",
-  "color": "indigo",
-  "version": "1.0.0",
-  "runInApp": true,
-  "description": "Git 源码管理器，支持变更查看、暂存、提交快照与历史回溯"
+  "contributors" : [
+
+  ],
+  "icon" : "arrow.triangle.branch",
+  "version" : "1.0.0",
+  "author" : null,
+  "permissions" : null,
+  "color" : "indigo",
+  "intentInputTypes" : [
+
+  ],
+  "runInApp" : true,
+  "remoteResource" : null,
+  "iconImage" : "",
+  "entry" : "index.tsx",
+  "name" : "Source Control",
+  "localizedNames" : {
+    "it" : "",
+    "pt" : "",
+    "zh" : "",
+    "de" : "",
+    "es" : "",
+    "ru" : "",
+    "fr" : "",
+    "ja" : "",
+    "en" : ""
+  },
+  "description" : "Git 源码管理器，支持变更查看、暂存、提交快照与历史回溯",
+  "localizedDescriptions" : {
+    "it" : "",
+    "es" : "",
+    "pt" : "",
+    "ja" : "",
+    "zh" : "",
+    "de" : "",
+    "ru" : "",
+    "fr" : "",
+    "en" : ""
+  }
 }

@@ -3,10 +3,12 @@
  * 封装单个 Git 仓库的具体操作，隐藏 isomorphic-git 的低层调用细节
  */
 
-import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter, IsomorphicGitHttpClient } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
 import { GitStatus } from "./GitStatus"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { GitDiff } from "./GitDiff"
+import { hashString } from "./identity/hash"
+import { createFetchHttpClient, sanitizeRemoteErrorMessage, validateRemoteCredential, validateRemoteName, validateRemoteUrl } from "./remote/RemoteValidation"
 
 declare const fetch: (url: string, init: { method: string; headers: Record<string, string>; body?: unknown }) => Promise<{
   url: string
@@ -119,72 +121,10 @@ function getSafeRevertOperations(
   return operations
 }
 
-function validateRemoteName(name: string): string {
-  if (!name || typeof name !== "string") {
-    throw new GitSafetyError("Remote 名称不能为空", "INVALID_REMOTE_NAME")
-  }
-  const trimmed = name.trim()
-  if (!trimmed || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(trimmed)) {
-    throw new GitSafetyError("Remote 名称格式不合法", "INVALID_REMOTE_NAME")
-  }
-  return trimmed
-}
-
-function validateRemoteUrl(url: string): string {
-  if (!url || typeof url !== "string") {
-    throw new GitSafetyError("Remote URL 不能为空", "INVALID_REMOTE_URL")
-  }
-  const trimmed = url.trim()
-  if (!trimmed || /[\u0000-\u001f\s]/.test(trimmed)) {
-    throw new GitSafetyError("Remote URL 格式不合法", "INVALID_REMOTE_URL")
-  }
-  return trimmed
-}
-
-function validateRemoteCredential(credential: GitRemoteCredential): GitRemoteCredential {
-  const username = credential?.username?.trim()
-  const password = credential?.password
-  if (!username) throw new GitSafetyError("Remote 用户名不能为空", "INVALID_REMOTE_CREDENTIAL")
-  if (!password || !password.trim()) throw new GitSafetyError("Remote 密码或 Token 不能为空", "INVALID_REMOTE_CREDENTIAL")
-  return { username, password }
-}
-
 function repositoryCredentialId(projectPath: string): string {
-  let first = 0x811c9dc5
-  let second = 0x9e3779b9
-  for (let index = 0; index < projectPath.length; index += 1) {
-    const code = projectPath.charCodeAt(index)
-    first = Math.imul(first ^ code, 0x01000193) >>> 0
-    second = Math.imul(second ^ code, 0x85ebca6b) >>> 0
-  }
-  return `${first.toString(16).padStart(8, "0")}${second.toString(16).padStart(8, "0")}`
+  return hashString(projectPath)
 }
 
-function sanitizeRemoteErrorMessage(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error))
-    .replace(/https?:\/\/[^@\s/]+@/gi, "https://***@")
-    .replace(/(password|token|authorization)=[^\s&]+/gi, "$1=***")
-}
-
-function createFetchHttpClient(): IsomorphicGitHttpClient {
-  return {
-    async request({ url, method, headers, body }) {
-      const response = await fetch(url, {
-        method,
-        headers,
-        body: await requestBodyBytes(body),
-      })
-      return {
-        url: response.url,
-        method,
-        statusCode: response.status,
-        statusMessage: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: response.body,
-      }
-    },
-  }
-}
 
 export class GitRepository {
   private static pullTestHooks: { onRollbackStart?: () => void } | null = null
@@ -195,17 +135,23 @@ export class GitRepository {
 
   readonly projectPath: string
   readonly gitdir: string
+  readonly projectId: string
   private readonly git: IsomorphicGitAdapter
   private readonly fs: unknown
 
-  constructor(projectPath: string, gitdir: string, git: IsomorphicGitAdapter, fs: unknown) {
+  constructor(projectPath: string, gitdir: string, git: IsomorphicGitAdapter, fs: unknown, projectId?: string) {
     this.projectPath = GitSafety.validateProjectPath(projectPath)
     this.gitdir = gitdir
+    this.projectId = projectId || `proj_${repositoryCredentialId(this.projectPath).slice(0, 12)}`
     this.git = git
     this.fs = fs
   }
 
   private credentialKey(remoteName: string): string {
+    return `source-control:remote-credential:v1:${this.projectId}:${remoteName}`
+  }
+
+  private legacyCredentialKey(remoteName: string): string {
     return `source-control:remote-credential:v1:${repositoryCredentialId(this.projectPath)}:${remoteName}`
   }
 
@@ -282,25 +228,52 @@ export class GitRepository {
 
   /** 仅读取指定 Remote 是否存在已保存的 Keychain Credential。 */
   async hasRemoteCredential(name: string): Promise<boolean> {
-    return Keychain.contains(this.credentialKey(validateRemoteName(name)))
+    const remote = validateRemoteName(name)
+    if (Keychain.contains(this.credentialKey(remote))) return true
+    return Keychain.contains(this.legacyCredentialKey(remote))
   }
 
   /** 供后续网络操作内部使用；调用方不得记录或展示 password。 */
   async getRemoteCredential(name: string): Promise<GitRemoteCredential | null> {
-    const value = Keychain.get(this.credentialKey(validateRemoteName(name)))
+    const remote = validateRemoteName(name)
+    let value = Keychain.get(this.credentialKey(remote))
+    let fromLegacy = false
+
+    // 兼容回退读取旧版基于路径 hash 的 Keychain 凭据并自动迁移
+    if (value === null) {
+      value = Keychain.get(this.legacyCredentialKey(remote))
+      if (value !== null) {
+        fromLegacy = true
+      }
+    }
+
     if (value === null) return null
     try {
       const credential = JSON.parse(value) as GitRemoteCredential
-      return validateRemoteCredential(credential)
+      const validated = validateRemoteCredential(credential)
+      // 如果是从 legacy 读出，透明迁移到新 key 下
+      if (fromLegacy) {
+        try {
+          Keychain.set(this.credentialKey(remote), value)
+        } catch {
+          /* ignore */
+        }
+      }
+      return validated
     } catch {
-      Keychain.remove(this.credentialKey(validateRemoteName(name)))
+      Keychain.remove(this.credentialKey(remote))
+      if (fromLegacy) {
+        Keychain.remove(this.legacyCredentialKey(remote))
+      }
       return null
     }
   }
 
   /** 删除指定 Remote 的 Keychain Credential；不存在时保持幂等。 */
   async removeRemoteCredential(name: string): Promise<void> {
-    Keychain.remove(this.credentialKey(validateRemoteName(name)))
+    const remote = validateRemoteName(name)
+    Keychain.remove(this.credentialKey(remote))
+    Keychain.remove(this.legacyCredentialKey(remote))
   }
 
   /** 仅读取 repository config 中已配置的 Remote。 */

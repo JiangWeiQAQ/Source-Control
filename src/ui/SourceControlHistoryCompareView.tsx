@@ -1,10 +1,13 @@
-import { Button, Divider, HStack, Image, List, Navigation, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
+import { Button, Divider, HStack, List, Navigation, Section, Text, useEffect, useState, VStack } from "scripting"
 import { GitBranchResetResult, GitCommitInfo, GitCommitWorkingTreeRestoreResult, GitSyncRecord } from "../core/types"
 import { GitService } from "../core/GitService"
 import { formatHistoryTime } from "./formatDate"
 import { CloseButton } from "./CloseButton"
 import { AppLanguage, createTranslator } from "./localization"
 import { SourceControlCommitDetailView } from "./SourceControlCommitDetailView"
+import { EmptyStateSection, ErrorSection, LoadingSection, ToolbarIconButton } from "./components"
+import type { UITokens } from "./design"
+import { useUISettings } from "./useUISettings"
 
 type SyncCompareRow = { local: GitCommitInfo; sync: GitSyncRecord | null }
 type Target = { remote: string; branch: string } | null
@@ -17,9 +20,7 @@ function isHistoryNavigationResult(value: unknown): value is HistoryNavigationRe
   return result.reset === true && typeof result.fromOid === "string" && typeof result.toOid === "string" && typeof result.shortOid === "string"
 }
 
-export interface SourceControlHistoryCompareViewProps { gitService: GitService; language?: AppLanguage; onChanged?: () => Promise<void> }
-
-function HeaderIconButton({ systemImage, onPress }: { systemImage: string; onPress: () => void }) { return <Button action={onPress} buttonStyle="borderless" contentShape={{ kind: "interaction", shape: "rect" }}><HStack frame={{ width: 44, height: 44, alignment: "center" }}><Image systemName={systemImage} /></HStack></Button> }
+export interface SourceControlHistoryCompareViewProps { gitService: GitService; language?: AppLanguage; onChanged?: () => Promise<void>; projectName?: string }
 
 export function alignHistory(local: GitCommitInfo[], remote: GitCommitInfo[]): Array<{ local: GitCommitInfo | null; remote: GitCommitInfo | null }> {
   const remoteOids = new Set(remote.map((item) => item.oid))
@@ -58,9 +59,9 @@ export function alignSyncRecords(local: GitCommitInfo[], records: GitSyncRecord[
 }
 
 
-function LocalCommitCell({ commit, onSelect }: { commit: GitCommitInfo; onSelect: (commit: GitCommitInfo) => void }) {
+function LocalCommitCell({ commit, onSelect, tokens }: { commit: GitCommitInfo; onSelect: (commit: GitCommitInfo) => void; tokens: UITokens }) {
   return <Button action={() => onSelect(commit)} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
-    <VStack spacing={3} alignment="leading" frame={{ maxWidth: "infinity", minHeight: 84, alignment: "leading" }} padding={{ top: 8, bottom: 8 }}>
+    <VStack spacing={tokens.compactSpacing} alignment="leading" frame={{ maxWidth: "infinity", minHeight: tokens.compareRowHeight, alignment: "leading" }} padding={{ horizontal: tokens.compareHorizontalPadding, vertical: tokens.compactPadding }}>
       <Text font="subheadline" lineLimit={2}>{commit.message}</Text>
       <Text font="caption" foregroundStyle="secondaryLabel">{formatHistoryTime(commit.timestamp)}</Text>
       <Text font="caption" foregroundStyle="secondaryLabel" monospaced>{commit.shortOid}</Text>
@@ -68,11 +69,11 @@ function LocalCommitCell({ commit, onSelect }: { commit: GitCommitInfo; onSelect
   </Button>
 }
 
-function SyncNodeCell({ commit, record, onSelect, language }: { commit: GitCommitInfo; record: GitSyncRecord | null; onSelect: (commit: GitCommitInfo) => void; language: AppLanguage }) {
-  if (!record) return <VStack frame={{ maxWidth: "infinity", minHeight: 84, alignment: "center" }}><Text font="title3" foregroundStyle="tertiaryLabel">⋮</Text></VStack>
+function SyncNodeCell({ commit, record, onSelect, language, tokens }: { commit: GitCommitInfo; record: GitSyncRecord | null; onSelect: (commit: GitCommitInfo) => void; language: AppLanguage; tokens: UITokens }) {
+  if (!record) return <VStack frame={{ maxWidth: "infinity", minHeight: tokens.compareRowHeight, alignment: "center" }}><Text font="title3" foregroundStyle="tertiaryLabel">⋮</Text></VStack>
   const isBaseline = record.kind === "baseline"
   return <Button action={() => onSelect(commit)} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
-    <VStack spacing={3} alignment="leading" frame={{ maxWidth: "infinity", minHeight: 84, alignment: "leading" }} padding={{ top: 8, bottom: 8 }}>
+    <VStack spacing={tokens.compactSpacing} alignment="leading" frame={{ maxWidth: "infinity", minHeight: tokens.compareRowHeight, alignment: "leading" }} padding={{ horizontal: tokens.compareHorizontalPadding, vertical: tokens.compactPadding }}>
       <Text font="subheadline" lineLimit={1}>{commit.message}</Text>
       {!isBaseline ? <Text font="caption" foregroundStyle="secondaryLabel">{formatHistoryTime(record.syncedAt)}</Text> : null}
       <Text font="caption" foregroundStyle="secondaryLabel" monospaced>{commit.shortOid}</Text>
@@ -81,9 +82,10 @@ function SyncNodeCell({ commit, record, onSelect, language }: { commit: GitCommi
   </Button>
 }
 
-export function SourceControlHistoryCompareView({ gitService, language = "en", onChanged }: SourceControlHistoryCompareViewProps) {
+export function SourceControlHistoryCompareView({ gitService, language = "en", onChanged, projectName }: SourceControlHistoryCompareViewProps) {
   const dismiss = Navigation.useDismiss()
   const t = createTranslator(language)
+  const { tokens } = useUISettings()
   const [target, setTarget] = useState<Target>(null)
   const [rows, setRows] = useState<SyncCompareRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -138,25 +140,40 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
 
   useEffect(() => { load().catch(console.error) }, [])
 
-  return <VStack spacing={0} alignment="leading" frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
-    <HStack spacing={4} frame={{ maxWidth: "infinity", minHeight: 52, alignment: "center" }} padding={{ horizontal: 4, vertical: 4 }} background="clear">
-      <CloseButton />
-      <Spacer />
-    </HStack>
-    <List navigationTitle="版本对照" toolbar={{ topBarTrailing: <Button title={fetching ? t("fetching") : t("refresh")} systemImage="arrow.clockwise" disabled={loading || fetching || state === "noRemote"} action={refresh} /> }}>
-    <Section>
-      <Text font="footnote" foregroundStyle="secondaryLabel">本地 ↔ GitHub</Text>
-      {target ? <Text font="caption" foregroundStyle="secondaryLabel">{target.remote} · {target.branch}</Text> : null}
-      <HStack spacing={6}><Text font="subheadline" frame={{ maxWidth: "infinity", alignment: "leading" }}>本地版本</Text><Divider /><Text font="subheadline" frame={{ maxWidth: "infinity", alignment: "leading" }}>GitHub 同步</Text></HStack>
-    </Section>
-    {loading ? <Section><ProgressView /></Section> : null}
-    {state === "noRemote" ? <Section><Text font="headline">尚未连接 GitHub</Text></Section> : null}
-    {state === "needsFetch" ? <Section><Button title="获取云端版本" buttonStyle="borderedProminent" disabled={fetching} action={refresh} /></Section> : null}
-    {state === "error" ? <Section><VStack spacing={8} alignment="leading"><Text font="headline" foregroundStyle="red">版本对照读取失败</Text><Text font="footnote" foregroundStyle="red">{errorMessage}</Text><Button title={t("retry")} action={load} /></VStack></Section> : null}
-    {state === "ready" && !loading ? <Section>{rows.length === 0 ? <Text font="footnote" foregroundStyle="secondaryLabel">暂无本地版本</Text> : rows.map((row) => <HStack key={row.local.oid} spacing={6} alignment="top"><LocalCommitCell commit={row.local} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} /><Divider /><SyncNodeCell commit={row.local} record={row.sync} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} language={language} /></HStack>)}</Section> : null}
-    {state === "ready" && !loading && target && rows.some((row) => row.sync?.kind === "push") === false && rows.some((row) => row.sync?.kind === "baseline") ? <Section><Text font="footnote" foregroundStyle="secondaryLabel">早期同步记录未保存，从当前 GitHub 状态开始记录。</Text></Section> : null}
-  </List>
-  </VStack>
+  const compareTitle = language === "zh-Hans" ? "本地 ↔ GitHub" : "Local ↔ GitHub"
+  const localColumnTitle = language === "zh-Hans" ? "本地版本" : "Local Versions"
+  const githubColumnTitle = language === "zh-Hans" ? "GitHub 同步" : "GitHub Sync"
+  const projectSubtitle = target ? `${projectName || "Source Control"} · ${target.branch}` : projectName || null
+
+  return (
+    <List
+      navigationTitle={compareTitle}
+      toolbar={{
+        topBarLeading: <CloseButton />,
+        topBarTrailing: <ToolbarIconButton systemImage="arrow.clockwise" disabled={loading || fetching || state === "noRemote"} onPress={() => { refresh().catch(console.error) }} />,
+      }}
+    >
+      <Section>
+        <VStack spacing={tokens.sectionSpacing} alignment="leading" padding={{ horizontal: tokens.pagePadding }}>
+          {projectSubtitle ? <Text font="caption" foregroundStyle="secondaryLabel" lineLimit={1}>{projectSubtitle}</Text> : null}
+          <HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.rowHeight, alignment: "leading" }}>
+            <Text font="subheadline" frame={{ maxWidth: "infinity", alignment: "leading" }}>{localColumnTitle}</Text>
+            <Divider />
+            <Text font="subheadline" frame={{ maxWidth: "infinity", alignment: "leading" }}>{githubColumnTitle}</Text>
+          </HStack>
+        </VStack>
+      </Section>
+      {loading ? <LoadingSection message={language === "zh-Hans" ? "正在读取版本对照…" : "Loading version comparison…"} /> : null}
+      {state === "noRemote" ? <EmptyStateSection title={language === "zh-Hans" ? "尚未连接 GitHub" : "Not connected to GitHub"} message={language === "zh-Hans" ? "请先配置 GitHub 远端。" : "Configure a GitHub remote first."} systemImage="externaldrive" /> : null}
+      {state === "needsFetch" ? <Section><Button title={language === "zh-Hans" ? "获取云端版本" : "Fetch GitHub Versions"} buttonStyle="borderedProminent" disabled={fetching} action={() => { refresh().catch(console.error) }} frame={{ minHeight: tokens.buttonHeight }} /></Section> : null}
+      {state === "error" ? <>
+        <ErrorSection message={errorMessage || (language === "zh-Hans" ? "无法读取版本对照。" : "Unable to load version comparison.")} title={language === "zh-Hans" ? "版本对照读取失败" : "Version comparison failed"} />
+        <Section><Button title={t("retry")} action={() => { load().catch(console.error) }} frame={{ minHeight: tokens.buttonHeight }} /></Section>
+      </> : null}
+      {state === "ready" && !loading ? rows.length === 0 ? <EmptyStateSection title={language === "zh-Hans" ? "暂无本地版本" : "No Local Versions"} systemImage="clock" /> : <Section>{rows.map((row) => <HStack key={row.local.oid} spacing={tokens.rowContentSpacing} alignment="top"><LocalCommitCell commit={row.local} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} /><Divider /><SyncNodeCell commit={row.local} record={row.sync} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} language={language} /></HStack>)}</Section> : null}
+      {state === "ready" && !loading && target && rows.some((row) => row.sync?.kind === "push") === false && rows.some((row) => row.sync?.kind === "baseline") ? <Section><Text font="footnote" foregroundStyle="secondaryLabel">早期同步记录未保存，从当前 GitHub 状态开始记录。</Text></Section> : null}
+    </List>
+  )
 }
 
 export default SourceControlHistoryCompareView

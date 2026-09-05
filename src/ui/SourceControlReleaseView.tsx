@@ -1,9 +1,12 @@
-import { Button, HStack, Image, List, Navigation, ProgressView, Section, Spacer, Text, TextField, useEffect, useState, VStack } from "scripting"
+import { Button, HStack, Image, List, Navigation, Section, Spacer, Text, TextField, useEffect, useState, VStack } from "scripting"
 import { GitHubReleaseService } from "../core/GitHubReleaseService"
 import { GitService } from "../core/GitService"
 import { GitHubReleaseResult } from "../core/types"
 import { CloseButton } from "./CloseButton"
-import { AppLanguage } from "./localization"
+import { ErrorSection } from "./components/ErrorSection"
+import { LoadingSection } from "./components/LoadingSection"
+import { formatRemoteRepository } from "../core/remote/RemoteValidation"
+import { useUISettings } from "./useUISettings"
 
 export interface SourceControlReleaseViewProps {
   gitService: GitService
@@ -16,16 +19,12 @@ function normalizeVersion(value: string): string | null {
 }
 
 function displayRepository(url: string): string {
-  try {
-    const parsed = new URL(url)
-    return `${parsed.hostname}${parsed.pathname.replace(/\.git$/i, "")}`
-  } catch {
-    return url.replace(/^https?:\/\//i, "")
-  }
+  return formatRemoteRepository(url)
 }
 
 export function SourceControlReleaseView({ gitService, projectPath }: SourceControlReleaseViewProps) {
   const dismiss = Navigation.useDismiss()
+  const { tokens } = useUISettings()
   const [version, setVersion] = useState("")
   const [notes, setNotes] = useState("")
   const [commitOid, setCommitOid] = useState("")
@@ -87,9 +86,10 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
   const normalizedVersion = normalizeVersion(version)
   const canPublish = !loading && configured && !publishing && normalizedVersion !== null
   return <List navigationTitle="发布 Release" toolbar={{ topBarLeading: <CloseButton /> }}>
-    {errorMessage ? <Section><Text font="footnote" foregroundStyle="red">{errorMessage}</Text></Section> : null}
+    {errorMessage ? <ErrorSection message={errorMessage} /> : null}
+    {loading ? <LoadingSection message="正在读取 Release 配置…" /> : null}
     <Section>
-      <VStack spacing={10} alignment="leading">
+      <VStack spacing={tokens.rowContentSpacing} alignment="leading">
         <Text font="headline">版本号</Text>
         <TextField title="版本号" value={version} onChanged={setVersion} prompt="1.0.1" />
         <Text font="headline">更新说明</Text>
@@ -97,7 +97,7 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
       </VStack>
     </Section>
     <Section>
-      <VStack spacing={5} alignment="leading">
+      <VStack spacing={tokens.compactSpacing} alignment="leading">
         <Text font="subheadline">当前 Commit</Text>
         <Text font="caption" foregroundStyle="secondaryLabel" monospaced>{commitOid || "—"}</Text>
         <Text font="subheadline">GitHub 仓库</Text>
@@ -105,7 +105,7 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
       </VStack>
     </Section>
     <Section>
-      <Button title={publishing ? "发布中…" : "发布到 GitHub"} systemImage="arrow.up.circle" buttonStyle="borderedProminent" disabled={!canPublish} action={publish} />
+      <Button title={publishing ? "发布中…" : "发布到 GitHub"} systemImage="arrow.up.circle" buttonStyle="borderedProminent" disabled={!canPublish} action={publish} frame={{ minHeight: tokens.buttonHeight }} />
     </Section>
     {result ? <Section header={<Text>发布成功</Text>}><VStack spacing={6} alignment="leading"><Text font="subheadline">{`Source Control ${result.version}`}</Text><Text font="caption" foregroundStyle="secondaryLabel">ZIP：{result.assetName}</Text><Button title="查看 Release" action={async () => { await Safari.openURL(result.releaseUrl) }} /><Button title="复制下载链接" action={async () => { await Pasteboard.setString(result.assetUrl); await Dialog.alert({ title: "下载链接已复制", message: "" }) }} /></VStack></Section> : null}
   </List>

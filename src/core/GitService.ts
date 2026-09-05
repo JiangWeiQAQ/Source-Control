@@ -8,19 +8,21 @@ import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCo
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { loadBufferPolyfill } from "../polyfills"
 import { ensureBaseline, recordSync, listSyncRecords as readSyncRecords } from "./GitSyncHistory"
-
+import {
+  ensureProjectMetadata,
+  findRelocationCandidates,
+  listAllProjects,
+  manualRelocateProject,
+  ProjectMetadata,
+  ProjectMetadataManager,
+  ProjectRegistry,
+  tryAutoRelocateProject,
+} from "./ProjectMetadata"
 declare const Buffer: any
 
-const GIT_REPOS_DIR = FileManager.appGroupDocumentsDirectory + "/git-repos"
-const REPO_MAP_FILE = GIT_REPOS_DIR + "/repo-map.json"
-
-interface RepoMap {
-  [projectDir: string]: string
-}
 
 export class GitService {
   private static cachedGitInstance: IsomorphicGitAdapter | null = null
-  private static cachedFS: unknown = null
   private currentRepo: GitRepository | null = null
 
   /**
@@ -66,42 +68,11 @@ export class GitService {
   }
 
   /**
-   * 获取项目的隔离 gitdir 存储路径
+   * 获取项目的隔离 gitdir 存储路径（委托 ProjectRegistry）
    */
-  private static async getGitdir(projectDir: string, customRepoName?: string): Promise<string> {
-    if (!(await FileManager.exists(GIT_REPOS_DIR))) {
-      await FileManager.createDirectory(GIT_REPOS_DIR, true)
-    }
-
-    let repoMap: RepoMap = {}
-    if (await FileManager.exists(REPO_MAP_FILE)) {
-      try {
-        const content = await FileManager.readAsString(REPO_MAP_FILE, "utf8")
-        repoMap = JSON.parse(content)
-      } catch {
-        repoMap = {}
-      }
-    }
-
-    const existing = repoMap[projectDir]
-
-    if (customRepoName) {
-      if (existing !== customRepoName) {
-        repoMap[projectDir] = customRepoName
-        await FileManager.writeAsString(REPO_MAP_FILE, JSON.stringify(repoMap, null, 2), "utf8")
-      }
-      return GIT_REPOS_DIR + "/" + customRepoName
-    }
-
-    if (existing) {
-      return GIT_REPOS_DIR + "/" + existing
-    }
-
-    const dirName = projectDir.split("/").filter(Boolean).pop() || "unnamed"
-    const safeName = dirName.replace(/[^a-zA-Z0-9_-]/g, "_")
-    repoMap[projectDir] = safeName
-    await FileManager.writeAsString(REPO_MAP_FILE, JSON.stringify(repoMap, null, 2), "utf8")
-    return GIT_REPOS_DIR + "/" + safeName
+  static async getGitdir(projectDir: string, customRepoName?: string): Promise<string> {
+    const validPath = GitSafety.validateProjectPath(projectDir)
+    return ProjectRegistry.getInstance().getGitdir(validPath, customRepoName)
   }
 
   /**
@@ -202,6 +173,7 @@ export class GitService {
 
       async rmdir(filepath: string): Promise<void> {
         const resolved = resolvePath(filepath)
+        if (resolved === workdir) throw new GitSafetyError("禁止删除项目根目录", "PROJECT_ROOT_DELETE_BLOCKED")
         try {
           await FileManager.remove(resolved)
         } catch {
@@ -211,6 +183,7 @@ export class GitService {
 
       async unlink(filepath: string): Promise<void> {
         const resolved = resolvePath(filepath)
+        if (resolved === workdir) throw new GitSafetyError("禁止删除项目根目录", "PROJECT_ROOT_DELETE_BLOCKED")
         try {
           await FileManager.remove(resolved)
         } catch {
@@ -305,7 +278,10 @@ export class GitService {
       },
 
       async rename(oldPath: string, newPath: string): Promise<void> {
-        await FileManager.rename(resolvePath(oldPath), resolvePath(newPath))
+        const oldResolved = resolvePath(oldPath)
+        const newResolved = resolvePath(newPath)
+        if (oldResolved === workdir || newResolved === workdir) throw new GitSafetyError("禁止替换项目根目录", "PROJECT_ROOT_RENAME_BLOCKED")
+        await FileManager.rename(oldResolved, newResolved)
       },
     }
 
@@ -334,16 +310,55 @@ export class GitService {
     return this.currentRepo
   }
 
+  /** 列出所有受管项目 */
+  static async listAllProjects(): Promise<ProjectMetadata[]> {
+    return listAllProjects()
+  }
+
+  /** 尝试自动重定位项目 */
+  static async tryAutoRelocateProject(projectId: string): Promise<{ success: boolean; newPath?: string; candidates: any[] }> {
+    const projects = await ProjectMetadataManager.loadProjects()
+    const record = projects[projectId]
+    if (!record) return { success: false, candidates: [] }
+    const candidates = await ProjectMetadataManager.findCandidates(record)
+    const strong = candidates.filter((c: any) => c.score >= 60)
+    if (strong.length === 1) {
+      const best = strong[0]
+      await ProjectMetadataManager.updateProjectRelocation(projectId, best.path, best.displayName)
+      return { success: true, newPath: best.path, candidates }
+    }
+    return { success: false, candidates }
+  }
+
+  /** 手动重定位项目 */
+  static async manualRelocateProject(projectId: string, newPath: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await ProjectMetadataManager.updateProjectRelocation(projectId, newPath)
+      return { success: true }
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err) }
+    }
+  }
+
+  /** 查找候选重定位目录 */
+  static async findRelocationCandidates(projectId: string): Promise<any[]> {
+    const projects = await ProjectMetadataManager.loadProjects()
+    const record = projects[projectId]
+    if (!record) return []
+    return ProjectMetadataManager.findCandidates(record)
+  }
+
   /**
    * 打开指定路径的 Git 仓库
    */
   async openRepository(projectPath: string): Promise<GitRepository> {
     const validPath = GitSafety.validateProjectPath(projectPath)
     const gitAdapter = await GitService.getGitAdapter()
+    const meta = await ensureProjectMetadata(validPath)
     const gitdir = await GitService.getGitdir(validPath)
     const fs = GitService.createFS(gitdir, validPath)
 
-    const repo = new GitRepository(validPath, gitdir, gitAdapter, fs)
+    const repo = new GitRepository(validPath, gitdir, gitAdapter, fs, meta.projectId)
     this.currentRepo = repo
     return repo
   }
@@ -375,7 +390,8 @@ export class GitService {
         await gitAdapter.setConfig({ fs, dir: validPath, gitdir, path: "user.email", value: "user@scripting.app" })
       }
 
-      this.currentRepo = new GitRepository(validPath, gitdir, gitAdapter, fs)
+      const meta = await ensureProjectMetadata(validPath, repoName)
+      this.currentRepo = new GitRepository(validPath, gitdir, gitAdapter, fs, meta.projectId)
       return { message: "仓库初始化成功", gitdir }
     } catch (error) {
       const formatted = GitSafety.formatErrorMessage(error, "初始化仓库")
@@ -463,7 +479,7 @@ export class GitService {
         kind: "push",
       }
       try {
-        await recordSync(repository.projectPath, record)
+        await recordSync(repository.projectId || repository.projectPath, record)
       } catch (error) {
         console.error("[SyncHistory] record failed", error)
       }
@@ -498,7 +514,7 @@ export class GitService {
         kind: "force-push",
       }
       try {
-        await recordSync(repository.projectPath, record)
+        await recordSync(repository.projectId || repository.projectPath, record)
       } catch (error) {
         console.error("[SyncHistory] force-push record failed", error)
       }
@@ -516,11 +532,11 @@ export class GitService {
     if (!remoteBranch || !remoteBranch.oid) return null
     const localHistory = await repository.getHistory(200)
     if (!localHistory.some((commit) => commit.oid === remoteBranch.oid)) return null
-    return ensureBaseline(repository.projectPath, remote, branch, remoteBranch.oid)
+    return ensureBaseline(repository.projectId || repository.projectPath, remote, branch, remoteBranch.oid)
   }
   async listSyncRecords(remoteName?: string, branchName?: string): Promise<GitSyncRecord[]> {
     const repository = this.ensureRepository()
-    return readSyncRecords(repository.projectPath, remoteName, branchName)
+    return readSyncRecords(repository.projectId || repository.projectPath, remoteName, branchName)
   }
 
   /** 仅比较本地已有 commit graph 与 remote-tracking ref，不会自动 Fetch。 */

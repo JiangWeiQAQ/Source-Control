@@ -1,4 +1,4 @@
-import { Button, List, Navigation, Section, Text, useEffect, useState } from "scripting"
+import { Button, List, Navigation, NavigationStack, Section, Text, useEffect, useState } from "scripting"
 import { ProjectMetadata, RelocationCandidate, findRelocationCandidates } from "../../core/ProjectMetadata"
 import { CloseButton } from "../CloseButton"
 import { ErrorSection } from "../components/ErrorSection"
@@ -31,11 +31,13 @@ export function RelinkProjectView({ project, onRelinked }: {
     }
   }
 
-  return <List navigationTitle="重新选择项目文件夹" toolbar={{ topBarLeading: <CloseButton /> }}>
+  return <NavigationStack>
+    <List navigationTitle="重新选择项目文件夹" toolbar={{ topBarLeading: <CloseButton /> }}>
     {errorMessage ? <ErrorSection message={errorMessage} /> : null}
     <Section><Button title="选择项目文件夹" systemImage="folder" action={chooseFolder} /></Section>
     <Section><Text foregroundStyle="secondaryLabel">可直接选择改名或移动后的真实项目文件夹。</Text></Section>
-  </List>
+    </List>
+  </NavigationStack>
 }
 
 export default RelinkProjectView

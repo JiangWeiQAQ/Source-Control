@@ -1,4 +1,4 @@
-import { Button, List, Navigation, Path, Section, Text, TextField, useEffect, useState } from "scripting"
+import { Button, List, Navigation, NavigationStack, Path, Section, Text, TextField, useEffect, useState } from "scripting"
 
 import { CloseButton } from "./CloseButton"
 
@@ -89,7 +89,8 @@ export function SourceControlProjectConfigView({ projectPath }: SourceControlPro
   }
 
   return (
-    <List navigationTitle="项目配置" toolbar={{ topBarLeading: <CloseButton /> }}>
+    <NavigationStack>
+      <List navigationTitle="项目配置" toolbar={{ topBarLeading: <CloseButton /> }}>
       {errorMessage ? <Section><Text foregroundStyle="red">{errorMessage}</Text></Section> : null}
       {saved ? <Section><Text foregroundStyle="green">已保存到当前项目的 script.json</Text></Section> : null}
       <Section header={<Text>常用字段</Text>}>
@@ -102,7 +103,8 @@ export function SourceControlProjectConfigView({ projectPath }: SourceControlPro
       <Section>
         <Button title="保存项目配置" buttonStyle="borderedProminent" action={save} />
       </Section>
-    </List>
+      </List>
+    </NavigationStack>
   )
 }
 

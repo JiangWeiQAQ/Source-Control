@@ -231,4 +231,25 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
   - `verify-release.ts`：全部场景通过（100%）。
 - **TypeScript 诊断**：全项目 0 errors。
 
+## 2026/09/05 GitHub Push 401 Unauthorized 鉴权失败排查与修复
+
+### 问题背景
+在 GitHub Push 过程中报错 HTTP 401 Unauthorized。
+
+### 根因分析
+1. **Scripting Keychain 运行时行为**：当调用 `Keychain.get(key)` 读取不存在的键时，Scripting 运行时返回 `undefined`（而非类型声明中标记的 `null`）。
+2. **凭据读取回退穿透失效**：在 `GitRepository.ts` 的 `getRemoteCredential()` 中，使用 `if (value === null)` 判断是否命中缓存。当项目尚未在新的 `projectId` 维度键存储凭据时，`value` 为 `undefined`，导致该判断为 `false`，从而跳过了对旧版 `legacyCredentialKey`（内含有效 Token）的回退读取；紧接着对 `undefined` 执行 `JSON.parse` 抛出 `SyntaxError`，被 `catch` 捕获后直接返回 `null`。
+3. **isomorphic-git onAuth 契约**：由于 `getRemoteCredential()` 返回 `null`，`pushRemote` 在构造 isomorphic-git 参数时将 `onAuth` 设为 `undefined`，推送请求未附带 Authorization 头部，GitHub 拒绝未授权操作并抛出 HTTP 401。
+
+### 修复措施
+1. **空值兼容**：在 `GitRepository.ts` 的 `getRemoteCredential` 与 `hasRemoteCredential` 中，将空值判定统一为 `value === null || value === undefined`。
+2. **透明迁移与安全清理**：当从 `legacyCredentialKey` 成功回退读出凭据后，自动写入新版 `credentialKey`，并安全移除旧版 key，完成透明平滑迁移。
+
+### 验证结果
+1. **GitHub API 验证**：经同一 Token 验证 `GET https://api.github.com/user`，HTTP 响应状态码为 `200 OK`，用户名正确（`JiangWeiQAQ`），Token 长度为 93，无空格/换行符污染。
+2. **Push 远端验证**：使用当前项目实际 remote（`Source-Control`）和分支（`master`）执行 `pushRemote`，推送成功（`pushed: true`），远端 OID 成功从 `c8081721a9242b95beff71573ff6d15c78810655` 更新为 `50b68d86699783d9769fb5420ec13ff3e0a8ee8d`。
+3. **TypeScript 诊断**：全项目 0 errors。
+4. **回归测试**：`verify-project-registry.ts` 27 项断言全部通过（100%）。
+
+
 

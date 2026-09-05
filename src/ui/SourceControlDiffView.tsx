@@ -3,6 +3,7 @@ import {
   HStack,
   List,
   Navigation,
+  NavigationStack,
   ProgressView,
   Section,
   Spacer,
@@ -170,7 +171,8 @@ export function SourceControlDiffView({ gitService, change, comparison: initialC
   const handlePrimaryAction = comparison === "staged" ? handleUnstage : handleStage
 
   return (
-    <List
+    <NavigationStack>
+      <List
       navigationTitle="Diff"
       toolbar={{
         topBarLeading: <CloseButton />,
@@ -239,7 +241,8 @@ export function SourceControlDiffView({ gitService, change, comparison: initialC
           />
         ) : null}
       </Section>
-    </List>
+      </List>
+    </NavigationStack>
   )
 }
 

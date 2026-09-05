@@ -4,6 +4,7 @@ import {
   Image,
   List,
   Navigation,
+  NavigationStack,
   ProgressView,
   Section,
   Text,
@@ -233,7 +234,8 @@ export function SourceControlCommitDetailView({
   const title = shortOid || (detail ? detail.shortOid : "Commit Detail")
 
   return (
-    <List
+    <NavigationStack>
+      <List
       navigationTitle={title}
       toolbar={{
         topBarLeading: <CloseButton />,
@@ -438,7 +440,8 @@ export function SourceControlCommitDetailView({
           </Section>
         </>
       ) : null}
-    </List>
+      </List>
+    </NavigationStack>
   )
 }
 export default SourceControlCommitDetailView

@@ -1,4 +1,4 @@
-import { Button, HStack, Image, List, Navigation, ProgressView, Section, Text, useEffect, useState, VStack } from "scripting"
+import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Text, useEffect, useState, VStack } from "scripting"
 import { GitCommitInfo } from "../core/types"
 import { GitService } from "../core/GitService"
 import { CloseButton } from "./CloseButton"
@@ -41,13 +41,15 @@ export function SourceControlRemoteHistoryView({ gitService, language = "en" }: 
 
   useEffect(() => { loadHistory().catch(console.error) }, [])
 
-  return <List navigationTitle={t("githubHistory")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={fetching ? t("fetching") : t("refresh")} systemImage="arrow.clockwise" disabled={loading || fetching} action={fetchAndReload} /> }}>
+  return <NavigationStack>
+    <List navigationTitle={t("githubHistory")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={fetching ? t("fetching") : t("refresh")} systemImage="arrow.clockwise" disabled={loading || fetching} action={fetchAndReload} /> }}>
     <Section><VStack spacing={4} alignment="leading"><Text font="headline">{target ? `${target.remote} · ${target.branch}` : "GitHub"}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("githubHistoryHint")}</Text></VStack></Section>
     {loading && !history.length ? <Section><ProgressView /></Section> : null}
     {needsFetch ? <Section><VStack spacing={8} alignment="leading"><Text font="headline">{t("fetchGithubStatusRequired")}</Text><Button title={fetching ? t("fetching") : t("fetchStatus")} buttonStyle="borderedProminent" disabled={fetching} action={fetchAndReload} /></VStack></Section> : null}
     {errorMessage ? <Section><VStack spacing={8} alignment="leading"><HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">{t("remoteHistoryLoadFailed")}</Text></HStack><Text font="footnote" foregroundStyle="red">{errorMessage}</Text><Button title={t("retry")} action={loadHistory} /></VStack></Section> : null}
     {!loading && !needsFetch && !errorMessage && history.length === 0 ? <Section><VStack spacing={8} alignment="center"><Text font="headline">{t("noGithubHistory")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("noGithubHistoryHint")}</Text></VStack></Section> : null}
     {history.length ? <Section header={<Text>{`${t("githubHistory")} · ${history.length}`}</Text>}>{history.map((commit) => <HistoryRow key={commit.oid} commit={commit} language={language} onSelect={() => { Navigation.present(<SourceControlCommitDetailView gitService={gitService} oid={commit.oid} shortOid={commit.shortOid} readOnly />).catch(console.error) }} />)}</Section> : null}
-  </List>
+    </List>
+  </NavigationStack>
 }
 export default SourceControlRemoteHistoryView

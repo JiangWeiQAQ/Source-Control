@@ -240,21 +240,22 @@ export class GitRepository {
     let fromLegacy = false
 
     // 兼容回退读取旧版基于路径 hash 的 Keychain 凭据并自动迁移
-    if (value === null) {
+    if (value === null || value === undefined) {
       value = Keychain.get(this.legacyCredentialKey(remote))
-      if (value !== null) {
+      if (value !== null && value !== undefined) {
         fromLegacy = true
       }
     }
 
-    if (value === null) return null
+    if (value === null || value === undefined) return null
     try {
       const credential = JSON.parse(value) as GitRemoteCredential
       const validated = validateRemoteCredential(credential)
-      // 如果是从 legacy 读出，透明迁移到新 key 下
+      // 如果是从 legacy 读出，透明迁移到新 key 下并安全清理 legacy key
       if (fromLegacy) {
         try {
           Keychain.set(this.credentialKey(remote), value)
+          Keychain.remove(this.legacyCredentialKey(remote))
         } catch {
           /* ignore */
         }

@@ -1,4 +1,4 @@
-import { Button, HStack, Image, List, Navigation, Section, Spacer, Text, TextField, useEffect, useState, VStack } from "scripting"
+import { Button, HStack, Image, List, Navigation, NavigationStack, Section, Spacer, Text, TextField, useEffect, useState, VStack } from "scripting"
 import { GitHubReleaseService } from "../core/GitHubReleaseService"
 import { GitService } from "../core/GitService"
 import { GitHubReleaseResult } from "../core/types"
@@ -85,7 +85,8 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
 
   const normalizedVersion = normalizeVersion(version)
   const canPublish = !loading && configured && !publishing && normalizedVersion !== null
-  return <List navigationTitle="发布 Release" toolbar={{ topBarLeading: <CloseButton /> }}>
+  return <NavigationStack>
+    <List navigationTitle="发布 Release" toolbar={{ topBarLeading: <CloseButton /> }}>
     {errorMessage ? <ErrorSection message={errorMessage} /> : null}
     {loading ? <LoadingSection message="正在读取 Release 配置…" /> : null}
     <Section>
@@ -108,7 +109,8 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
       <Button title={publishing ? "发布中…" : "发布到 GitHub"} systemImage="arrow.up.circle" buttonStyle="borderedProminent" disabled={!canPublish} action={publish} frame={{ minHeight: tokens.buttonHeight }} />
     </Section>
     {result ? <Section header={<Text>发布成功</Text>}><VStack spacing={6} alignment="leading"><Text font="subheadline">{`Source Control ${result.version}`}</Text><Text font="caption" foregroundStyle="secondaryLabel">ZIP：{result.assetName}</Text><Button title="查看 Release" action={async () => { await Safari.openURL(result.releaseUrl) }} /><Button title="复制下载链接" action={async () => { await Pasteboard.setString(result.assetUrl); await Dialog.alert({ title: "下载链接已复制", message: "" }) }} /></VStack></Section> : null}
-  </List>
+    </List>
+  </NavigationStack>
 }
 
 export default SourceControlReleaseView

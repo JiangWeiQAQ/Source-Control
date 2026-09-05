@@ -1,4 +1,4 @@
-import { Button, List, Navigation, Section, useState } from "scripting"
+import { Button, List, Navigation, NavigationStack, Section, useState } from "scripting"
 import { ProjectMetadata } from "../../core/ProjectMetadata"
 import { CloseButton } from "../CloseButton"
 import { ErrorSection } from "../components/ErrorSection"
@@ -35,10 +35,12 @@ export function AddProjectFolderView({ managedProjects, onAdded }: AddProjectFol
     }
   }
 
-  return <List navigationTitle="选择项目文件夹" toolbar={{ topBarLeading: <CloseButton /> }}>
+  return <NavigationStack>
+    <List navigationTitle="选择项目文件夹" toolbar={{ topBarLeading: <CloseButton /> }}>
     {errorMessage ? <ErrorSection message={errorMessage} /> : null}
     <Section><Button title={loading ? "正在读取…" : "选择项目文件夹"} systemImage="folder" disabled={loading} action={chooseFolder} /></Section>
-  </List>
+    </List>
+  </NavigationStack>
 }
 
 export default AddProjectFolderView

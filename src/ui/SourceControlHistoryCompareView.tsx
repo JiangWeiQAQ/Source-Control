@@ -1,4 +1,4 @@
-import { Button, Divider, HStack, List, Navigation, Section, Text, useEffect, useState, VStack } from "scripting"
+import { Button, Divider, HStack, List, Navigation, NavigationStack, Section, Text, useEffect, useState, VStack } from "scripting"
 import { GitBranchResetResult, GitCommitInfo, GitCommitWorkingTreeRestoreResult, GitSyncRecord } from "../core/types"
 import { GitService } from "../core/GitService"
 import { formatHistoryTime } from "./formatDate"
@@ -146,7 +146,8 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
   const projectSubtitle = target ? `${projectName || "Source Control"} · ${target.branch}` : projectName || null
 
   return (
-    <List
+    <NavigationStack>
+      <List
       navigationTitle={compareTitle}
       toolbar={{
         topBarLeading: <CloseButton />,
@@ -172,7 +173,8 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
       </> : null}
       {state === "ready" && !loading ? rows.length === 0 ? <EmptyStateSection title={language === "zh-Hans" ? "暂无本地版本" : "No Local Versions"} systemImage="clock" /> : <Section>{rows.map((row) => <HStack key={row.local.oid} spacing={tokens.rowContentSpacing} alignment="top"><LocalCommitCell commit={row.local} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} /><Divider /><SyncNodeCell commit={row.local} record={row.sync} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} language={language} /></HStack>)}</Section> : null}
       {state === "ready" && !loading && target && rows.some((row) => row.sync?.kind === "push") === false && rows.some((row) => row.sync?.kind === "baseline") ? <Section><Text font="footnote" foregroundStyle="secondaryLabel">早期同步记录未保存，从当前 GitHub 状态开始记录。</Text></Section> : null}
-    </List>
+      </List>
+    </NavigationStack>
   )
 }
 

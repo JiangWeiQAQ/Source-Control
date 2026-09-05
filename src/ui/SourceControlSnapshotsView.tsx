@@ -4,6 +4,7 @@ import {
   Image,
   List,
   Navigation,
+  NavigationStack,
   ProgressView,
   Section,
   Spacer,
@@ -103,7 +104,8 @@ export function SourceControlSnapshotsView({
   }
 
   return (
-    <List
+    <NavigationStack>
+      <List
       navigationTitle="Safety Snapshots"
       toolbar={{
         topBarLeading: <CloseButton />,
@@ -195,7 +197,8 @@ export function SourceControlSnapshotsView({
           })}
         </Section>
       ) : null}
-    </List>
+      </List>
+    </NavigationStack>
   )
 }
 

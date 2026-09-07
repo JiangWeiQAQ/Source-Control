@@ -38,6 +38,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   const [loading, setLoading] = useState(true)
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null)
   const [forcePushLock] = useState({ active: false })
+  const [requestSequence] = useState({ value: 0 })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const busy = activeOperation !== null
   const selectedRemote = state.selected
@@ -57,14 +58,17 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   }
 
   const reloadRemoteState = async (preferred?: string | null) => {
+    const requestId = ++requestSequence.value
     setLoading(true)
     setErrorMessage(null)
     try {
-      setState(await readState(preferred || null))
+      const next = await readState(preferred ?? null)
+      if (requestId !== requestSequence.value) return
+      setState(next)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
+      if (requestId === requestSequence.value) setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
-      setLoading(false)
+      if (requestId === requestSequence.value) setLoading(false)
     }
   }
 
@@ -80,6 +84,15 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     }
   }
 
+  const handleOpenSettings = async () => {
+    if (!onOpenSettings) return
+    const preferredRemote = selectedRemote?.name ?? null
+    requestSequence.value += 1
+    await onOpenSettings()
+    setState(emptyState)
+    await reloadRemoteState(preferredRemote)
+  }
+
   const syncStateMessage = (sync: GitAheadBehind | null): string => {
     if (!sync) return t("repositoryInspection")
     if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) return t("divergedMessage")
@@ -89,9 +102,10 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   }
 
   const fetchLatestState = async (remoteName: string): Promise<RemoteState> => {
+    const requestId = ++requestSequence.value
     await gitService.fetchRemote(remoteName)
     const latest = await readState(remoteName)
-    setState(latest)
+    if (requestId === requestSequence.value) setState(latest)
     return latest
   }
 
@@ -116,7 +130,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
         }
       }
       await gitService.pushRemote(remoteName, branch)
-      setState(await readState(remoteName))
+      await reloadRemoteState(remoteName)
       await notifyChanged()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -155,7 +169,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
       })
       if (!confirmed) return
       await gitService.pushRemote(selectedRemote.name, latest.branch || state.branch)
-      setState(await readState(selectedRemote.name))
+      await reloadRemoteState(selectedRemote.name)
       await notifyChanged()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -193,8 +207,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
       const secondConfirmed = await Dialog.confirm({ title: "确认覆盖 GitHub？", message: `GitHub 当前：${sync.remoteOid.slice(0, 7)}\n本地当前：${sync.localOid.slice(0, 7)}\n\n此操作会重写 GitHub 分支历史。`, cancelLabel: t("cancel"), confirmLabel: "覆盖 GitHub" })
       if (!secondConfirmed) return
       await gitService.forcePushLocalToRemote(selectedRemote.name, latest.branch || state.branch)
-      const refreshed = await fetchLatestState(selectedRemote.name)
-      setState(refreshed)
+      await fetchLatestState(selectedRemote.name)
       await notifyChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -212,7 +225,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
       const latest = await fetchLatestState(selectedRemote.name)
       if (!latest.sync || latest.sync.ahead > 0 || latest.sync.diverged || latest.sync.behind === 0) return
       await gitService.pullRemote(selectedRemote.name, latest.branch || state.branch)
-      setState(await readState(selectedRemote.name))
+      await reloadRemoteState(selectedRemote.name)
       await notifyChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -244,9 +257,9 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
           {syncContent()}
         </VStack>
       </Section>
-      {onOpenSettings ? <Section><Button action={onOpenSettings} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}><HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.rowHeight, alignment: "leading" }}><Image systemName="gearshape" foregroundStyle="secondaryLabel" /><VStack spacing={2} alignment="leading"><Text font="subheadline">{t("githubSettings")}</Text><Text font="caption" foregroundStyle="secondaryLabel">{t("githubSettingsHint")}</Text></VStack><Spacer /><Image systemName="chevron.right" foregroundStyle="secondaryLabel" /></HStack></Button></Section> : null}
+      {onOpenSettings ? <Section><Button action={() => { handleOpenSettings().catch(console.error) }} buttonStyle="plain" disabled={busy} contentShape={{ kind: "interaction", shape: "rect" }}><HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.rowHeight, alignment: "leading" }}><Image systemName="gearshape" foregroundStyle="secondaryLabel" /><VStack spacing={2} alignment="leading"><Text font="subheadline">{t("githubSettings")}</Text><Text font="caption" foregroundStyle="secondaryLabel">{t("githubSettingsHint")}</Text></VStack><Spacer /><Image systemName="chevron.right" foregroundStyle="secondaryLabel" /></HStack></Button></Section> : null}
     </> : null}
-    {!loading && !selectedRemote && onOpenSettings ? <Section><Button action={onOpenSettings} buttonStyle="borderedProminent" title={t("githubSettings")} /></Section> : null}
+    {!loading && !selectedRemote && onOpenSettings ? <Section><Button action={() => { handleOpenSettings().catch(console.error) }} buttonStyle="borderedProminent" disabled={busy} title={t("githubSettings")} /></Section> : null}
   </List>
   </NavigationStack>
 }

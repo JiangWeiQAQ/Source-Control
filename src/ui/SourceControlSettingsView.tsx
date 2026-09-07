@@ -29,6 +29,8 @@ type GithubSettingsState = {
   status: GitRepositoryStatus | null
   sync: GitAheadBehind | null
   credential: boolean
+  credentialRemoteName: string | null
+  credentialBound: boolean
   tokenStatus: GithubTokenStatus
   checked: boolean
 }
@@ -43,7 +45,9 @@ const emptyGithubState: GithubSettingsState = {
   status: null,
   sync: null,
   credential: false,
-  tokenStatus: "configured-unverified",
+  credentialRemoteName: null,
+  credentialBound: false,
+  tokenStatus: "not-configured",
   checked: false,
 }
 
@@ -90,6 +94,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const [loading, setLoading] = useState(false)
   const [operation, setOperation] = useState<SettingsOperation>(null)
   const [forcePushLock] = useState({ active: false })
+  const [requestSequence] = useState({ value: 0 })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [releaseVersion, setReleaseVersion] = useState<string | null>(null)
   const [releaseVersionError, setReleaseVersionError] = useState<string | null>(null)
@@ -110,21 +115,44 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     }
   }
 
-  const loadGithubConfiguration = async () => {
+  const loadGithubConfiguration = async (preservedCredentialRemote?: GitRemoteInfo | null) => {
     if (!gitService) return
+    const requestId = ++requestSequence.value
     setLoading(true)
     setErrorMessage(null)
     try {
       const remotes = await gitService.listRemotes()
       const selected = remotes.find((remote) => remote.name === "origin") ?? remotes[0] ?? null
+      const [branch, status] = await Promise.all([
+        gitService.getCurrentBranch().catch(() => null),
+        gitService.getStatus().catch(() => null),
+      ])
+      const branches = selected ? await gitService.listRemoteBranches(selected.name) : []
       const credential = selected && isHttps(selected.url) ? await gitService.hasRemoteCredential(selected.name) : false
-      const branch = await gitService.getCurrentBranch().catch(() => null)
-      const status = await gitService.getStatus().catch(() => null)
-      setGithubState({ ...emptyGithubState, remotes, selected, tokenStatus: credential ? "configured-unverified" : "not-configured", branch, status })
+      const preservedCredential = preservedCredentialRemote
+        ? await gitService.hasRemoteCredential(preservedCredentialRemote.name)
+        : false
+      const sync = branch && selected && branches.some((item) => item.name === branch)
+        ? await gitService.getAheadBehind(selected.name, branch)
+        : null
+      if (requestId !== requestSequence.value) return
+      setGithubState({
+        ...emptyGithubState,
+        remotes,
+        selected,
+        branches,
+        branch,
+        status,
+        sync,
+        credential: credential || preservedCredential,
+        credentialRemoteName: credential ? selected?.name ?? null : preservedCredential ? preservedCredentialRemote?.name ?? null : null,
+        credentialBound: credential,
+        tokenStatus: credential || preservedCredential ? "configured-unverified" : "not-configured",
+      })
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error))
+      if (requestId === requestSequence.value) setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
-      setLoading(false)
+      if (requestId === requestSequence.value) setLoading(false)
     }
   }
 
@@ -229,7 +257,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     try {
       await gitService.setRemoteCredential(selectedRemote.name, { username: "x-access-token", password: token.trim() })
       const credential = await gitService.hasRemoteCredential(selectedRemote.name)
-      setGithubState((current) => ({ ...current, credential, tokenStatus: credential ? "configured-unverified" : "not-configured" }))
+      setGithubState((current) => ({ ...current, credential, credentialRemoteName: credential ? selectedRemote.name : null, credentialBound: credential, tokenStatus: credential ? "configured-unverified" : "not-configured" }))
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -239,7 +267,8 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   }
 
   const removeToken = async () => {
-    if (!gitService || !selectedRemote || !githubState.credential || busy) return
+    const credentialRemoteName = githubState.credentialRemoteName ?? selectedRemote?.name ?? null
+    if (!gitService || !credentialRemoteName || !githubState.credential || busy) return
     const selected = await Dialog.actionSheet({
       title: copy(language, "移除访问令牌？", "Remove Access Token?"),
       message: copy(language, "这只会移除 Keychain 中保存的令牌，不会修改仓库配置。", "This removes the saved Keychain token without changing the repository configuration."),
@@ -248,10 +277,11 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     if (selected !== 0) return
 
     setOperation("credential")
+    requestSequence.value += 1
     setErrorMessage(null)
     try {
-      await gitService.removeRemoteCredential(selectedRemote.name)
-      setGithubState((current) => ({ ...current, credential: false, tokenStatus: "not-configured" }))
+      await gitService.removeRemoteCredential(credentialRemoteName)
+      setGithubState((current) => ({ ...current, credential: false, credentialRemoteName: null, credentialBound: false, tokenStatus: "not-configured" }))
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -271,13 +301,21 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       ],
     })
     if (selected !== 0 && selected !== 1) return
+    const removedRemote = selectedRemote
     setOperation("remote")
+    requestSequence.value += 1
     setErrorMessage(null)
     try {
-      await gitService.removeRemote(selectedRemote.name)
-      if (selected === 0) await gitService.removeRemoteCredential(selectedRemote.name)
-      await loadGithubConfiguration()
+      await gitService.removeRemote(removedRemote.name)
+      let operationError: unknown = null
+      try {
+        if (selected === 0) await gitService.removeRemoteCredential(removedRemote.name)
+      } catch (error) {
+        operationError = error
+      }
+      await loadGithubConfiguration(selected === 1 ? removedRemote : null)
       await notifyRemoteChanged()
+      if (operationError) throw operationError
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -287,6 +325,10 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const manageToken = async () => {
     if (!githubState.credential) {
       await setToken()
+      return
+    }
+    if (!selectedRemote) {
+      await removeToken()
       return
     }
     const selected = await Dialog.actionSheet({
@@ -307,7 +349,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     try {
       const token = await gitService.getRemoteCredential(selectedRemote.name)
       if (!token) {
-        setGithubState((current) => ({ ...current, credential: false, tokenStatus: "not-configured", checked: true }))
+        setGithubState((current) => ({ ...current, credential: false, credentialRemoteName: null, credentialBound: false, tokenStatus: "not-configured", checked: true }))
         return
       }
       const tokenCheck = await checkGithubToken(token.password, selectedRemote.url)
@@ -320,7 +362,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       ])
       const refreshedRemote = remotes.find((remote) => remote.name === selectedRemote.name) ?? selectedRemote
       const sync = branch && branches.some((item) => item.name === branch) ? await gitService.getAheadBehind(selectedRemote.name, branch) : null
-      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential: true, tokenStatus: tokenCheck.status, checked: true })
+      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential: true, credentialRemoteName: refreshedRemote.name, credentialBound: true, tokenStatus: tokenCheck.status, checked: true })
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -344,7 +386,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       const refreshedRemote = remotes.find((remote) => remote.name === selectedRemote.name) ?? selectedRemote
       const sync = branch && branches.some((item) => item.name === branch) ? await gitService.getAheadBehind(selectedRemote.name, branch) : null
       const credential = isHttps(refreshedRemote.url) ? await gitService.hasRemoteCredential(refreshedRemote.name) : false
-      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential, tokenStatus: credential ? "configured-unverified" : "not-configured", checked: true })
+      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential, credentialRemoteName: credential ? refreshedRemote.name : null, credentialBound: credential, tokenStatus: credential ? "configured-unverified" : "not-configured", checked: true })
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -485,7 +527,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
 
   const preferenceLabel = preference === "system" ? "System" : preference === "zh-Hans" ? "简体中文" : "English"
   const currentDensityLabel = densityLabel(density, language)
-  const tokenStatusLabel = githubState.tokenStatus === "not-configured" ? copy(language, "未配置", "Not Configured") : githubState.tokenStatus === "configured-unverified" ? copy(language, "已配置，未验证", "Configured, Not Verified") : githubState.tokenStatus === "valid" ? copy(language, "验证成功", "Verified") : githubState.tokenStatus === "invalid" ? copy(language, "验证失败", "Verification Failed") : copy(language, "权限不足", "Insufficient Permission")
+  const tokenStatusLabel = githubState.tokenStatus === "not-configured" ? copy(language, "未配置", "Not Configured") : githubState.tokenStatus === "configured-unverified" ? (githubState.credentialBound ? copy(language, "已配置，未验证", "Configured, Not Verified") : copy(language, "已配置，未绑定 Remote", "Configured, No Remote Bound")) : githubState.tokenStatus === "valid" ? copy(language, "验证成功", "Verified") : githubState.tokenStatus === "invalid" ? copy(language, "验证失败", "Verification Failed") : copy(language, "权限不足", "Insufficient Permission")
   const statusLabel = githubStatusLabel(githubState, language)
 
   return (
@@ -515,7 +557,8 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
            <Section header={<Text>GitHub</Text>}>
             {loading && !selectedRemote ? <LoadingSection message={copy(language, "正在读取 GitHub 配置…", "Loading GitHub settings…")} /> : null}
             {!loading && !selectedRemote ? <Button title={copy(language, "添加 GitHub 仓库", "Add GitHub Repository")} systemImage="plus" disabled={busy} action={addRemote} /> : null}
-            {selectedRemote ? <>
+             {!loading && !selectedRemote && githubState.credential ? <Section><SettingsRow icon="key" title={copy(language, "访问令牌", "Access Token")} subtitle={tokenStatusLabel} onPress={manageToken} disabled={busy} /><Button title={copy(language, "清除 Token", "Clear Token")} systemImage="trash" role="destructive" disabled={busy} action={removeToken} /></Section> : null}
+             {selectedRemote ? <>
               <SettingsRow
                 icon="externaldrive"
                 title={copy(language, "仓库", "Repository")}

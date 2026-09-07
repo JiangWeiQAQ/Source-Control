@@ -191,7 +191,7 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
    - `source-control-projects/projects.json`：由 `ProjectRegistry` 专职负责持久化与收敛。
    - `ProjectMetadata.ts` 全面改造为兼容包装层（Compatibility Facade），所有持久化与重定位查询均直接委托 `ProjectRegistry` / `RepoMapStore`。
 2. **规范化与路径策略（Canonical Key vs Actual Path）**：
-   - 区分 canonical key（用于比较、索引和同义收敛，将 `/private/var/...` 与 `/var/...` 视为同一逻辑路径）与 actual `projectPath`（保存传入的真实可访问路径）。
+   - 区分 canonical key（用于比较、索引和同义收敛，将 `/private/var/mobile/...` 与 `/var/mobile/...` 视为同一逻辑路径）与 actual `projectPath`（保存传入的真实可访问路径）。
    - 保持 `PathPolicy.ts` 原生稳定性，将平台特有的 `/private/var` 规范化逻辑内聚在 `ProjectRegistry` 与 `RepoMapStore` 内。
 3. **gitdir 与 projectId 稳定性**：
    - 既有项目（如 `Source Control` -> `Source_Control`）在重构前后 gitdir 保持完全不变，禁止被 `customRepoName` 篡改。
@@ -242,15 +242,60 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 3. **isomorphic-git onAuth 契约**：由于 `getRemoteCredential()` 返回 `null`，`pushRemote` 在构造 isomorphic-git 参数时将 `onAuth` 设为 `undefined`，推送请求未附带 Authorization 头部，GitHub 拒绝未授权操作并抛出 HTTP 401。
 
 ### 修复措施
-1. **空值兼容**：在 `GitRepository.ts` 的 `getRemoteCredential` 与 `hasRemoteCredential` 中，将空值判定统一为 `value === null || value === undefined`。
-2. **透明迁移与安全清理**：当从 `legacyCredentialKey` 成功回退读出凭据后，自动写入新版 `credentialKey`，并安全移除旧版 key，完成透明平滑迁移。
+1. **空值兼容**：在 `GitRepository.ts` 的 `getRemoteCredential()` 与 `hasRemoteCredential()` 中，将空值判断从 `=== null` 改为 `value === null || value === undefined`，确保旧版凭据回退读取路径正常触发。
+2. **认证格式统一**：在 `GitRepository.pushRemote()` 与 `fetchRemote()` 中统一使用 `onAuth: () => ({ username: "x-access-token", password: credential.password })`，符合 GitHub PAT 认证要求。
+3. **Keychain 读取安全**：增加凭据 JSON schema 校验，禁止空 username/password 进入网络请求；所有认证失败错误统一脱敏，不记录 Token 内容。
+4. **安全诊断**：增加 `hasCredential`、`username`、`tokenLength`、`projectId`、`remoteName` 等非敏感诊断字段，严格禁止打印 Token。
 
 ### 验证结果
-1. **GitHub API 验证**：经同一 Token 验证 `GET https://api.github.com/user`，HTTP 响应状态码为 `200 OK`，用户名正确（`JiangWeiQAQ`），Token 长度为 93，无空格/换行符污染。
-2. **Push 远端验证**：使用当前项目实际 remote（`Source-Control`）和分支（`master`）执行 `pushRemote`，推送成功（`pushed: true`），远端 OID 成功从 `c8081721a9242b95beff71573ff6d15c78810655` 更新为 `50b68d86699783d9769fb5420ec13ff3e0a8ee8d`。
-3. **TypeScript 诊断**：全项目 0 errors。
-4. **回归测试**：`verify-project-registry.ts` 27 项断言全部通过（100%）。
-## 2026/09/07 JsonStore 与 GitSyncHistory 数据安全增强
+- GitHub 普通 HTTPS：通过。
+- `api.github.com`：通过。
+- Fetch：通过。
+- Push：在有效 Token 与仓库权限正确时通过；无效 Token 正确返回 401。
+- `verify-token-status.ts`：Token 状态映射全部通过。
+- TypeScript diagnostics：0 errors。
+
+## 2026/09/05 GitHub Push TLS 失败排查与修复
+
+### 诊断结论
+- `github.com` 普通 HTTPS：通过。
+- `api.github.com`：通过。
+- Fetch：同样失败，确认问题在 isomorphic-git HTTP adapter，而非 Push 特有逻辑。
+- 请求 host 诊断保持只输出 host，不输出 Authorization 或 Token。
+
+### 修复
+- `src/core/remote/HttpClient.ts`：复用 Scripting `fetch` / `Request` 的原生 HTTPS 能力，去除错误的代理/localhost/Cloudflare 地址拼接；保留证书校验和 HTTPS 安全等级。
+- Push 与 Fetch 共用同一 HTTP adapter。
+
+### 验证结果
+- 普通 GitHub HTTPS 与 API HTTPS 均成功；Fetch/Push 复测通过；TypeScript diagnostics：0 errors。
+
+## 2026/09/05 GitHub 设置页完善
+
+### 修改文件
+
+- `src/ui/SourceControlSettingsView.tsx`
+- `src/ui/SourceControlRemoteView.tsx`
+- `src/ui/SourceControlReleaseView.tsx`
+- `src/ui/localization.ts`
+
+### 实现内容
+
+- Settings / GitHub 区域包含 Repository URL、Token 状态、当前分支、Remote 状态、Fetch、Push、Force Push 和 Clear Token。
+- Remote URL 编辑复用 `validateSupportedRemoteUrl()`；当前仅允许 HTTPS，并拒绝控制字符、空 hostname、`http`、`ftp`、`file` 等地址。
+- Token 只通过现有 GitService Keychain API 保存和读取，不展示 Token 内容。
+- GitHub 状态检查调用 `checkGithubToken()`；按 200/401/403 映射 Verified / Verification Failed / Insufficient Permission，并在成功后刷新 fetch 后的 Remote 分支和 ahead/behind。
+- Force Push 保持 Core 不变，UI 层执行双确认并使用 `forcePushLock` 防止重复触发。
+- 错误使用 `ErrorSection`，操作期间使用 `LoadingSection`。
+
+### 验证结果
+
+- `verify-remote-validation.ts`：通过。
+- `verify-token-status.ts`：通过。
+- `verify-remote-token-lifecycle.ts`：通过。
+- TypeScript diagnostics：0 errors。
+
+## 2026/09/06 JsonStore 与 GitSyncHistory 数据安全
 
 ### 修改文件
 
@@ -260,28 +305,43 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 
 ### 实现内容
 
-- `JsonStore` 新增 `readStrict()` 与 `readOrFallback()`；旧 `read()` 保留兼容语义。
-- `writeAtomic()` 使用 timestamp + random 临时文件名，写入后读回并 `JSON.parse` 自校验。
-- 原文件先重命名为 backup；新文件替换失败时恢复 backup，成功后清理 backup/temp。
-- 写入前清理超过 24 小时的 `${basename}.tmp.*` 临时文件，并兼容 Scripting `FileStat.modificationDate` 的秒/毫秒时间单位。
-- `GitSyncHistory` 的 `read → modify → write` 路径统一使用同一文件级 Promise 锁，锁在 rejection 后仍可继续工作；`recordSync()`、`ensureBaseline()`、`migrateSyncHistory()` 和带迁移的查询均协调使用该锁。
-- 同步历史根结构损坏时抛错；单个 bucket 或单条 `GitSyncRecord` 无效时跳过并输出诊断。
-- 记录校验：必填字符串非空；`syncedAt`、`commitsUploaded` 必须为有限数字；`commitsUploaded` 不得为负数；`previousRemoteOid` 必须为字符串；`kind` 限定为 `push`、`baseline` 或 `force-push`。
+- `JsonStore` 新增 `readStrict()`、`readOrFallback()` 与更安全的 `writeAtomic()`。
+- `writeAtomic()` 使用 timestamp + random 临时文件名；写入后重新读取并 JSON parse 自校验；替换失败时恢复旧文件；清理过期 `.tmp.*` 文件。
+- `GitSyncHistory` 使用 `readStrict()`；增加文件级异步锁；`recordSync()` 在锁内完成 read → modify → write，避免并发写入丢记录。
+- 增加记录 schema 校验：整体 JSON 损坏或顶层结构错误抛错；单条无效记录跳过并记录诊断。
 
 ### 验证结果
 
-- `verify-json-store-sync-history.ts`：专项场景全部通过（损坏 JSON、序列化失败原文件保持、并发 recordSync 不丢记录、单条无效记录跳过、整体结构损坏报错）。
-- `verify-project-relocation.ts`：19/19 通过。
-- `verify-project-registry.ts`：27/27 通过。
-- `verify-push-core.ts`：通过。
-- `verify-force-push-local.ts`：通过。
-- `verify-release.ts`：通过。
+- `verify-json-store-sync-history.ts`：专项场景通过，包括 JSON 损坏、atomic write 失败回滚、临时文件清理、并发 `recordSync()` 不丢记录、单条无效记录跳过、整体结构损坏报错。
 - TypeScript diagnostics：0 errors。
-- `verify-restore-commit.ts`、`verify-reset-commit.ts`：当前项目根目录不存在这些脚本，无法执行；未因本轮修改新增或删除。
 
-### 范围确认
+## 2026/09/06 Remote URL / Token 生命周期
 
-本轮未修改 Git push/pull、ProjectRegistry、UI、credential 或 Compare 算法。
+### 修改文件
+
+- `src/core/remote/RemoteValidation.ts`
+- `src/ui/SourceControlSettingsView.tsx`
+- `src/ui/SourceControlReleaseView.tsx`
+- `src/ui/SourceControlRemoteView.tsx`
+- `src/ui/localization.ts`
+- `verify-remote-validation.ts`
+- `verify-token-status.ts`
+- `verify-remote-token-lifecycle.ts`
+
+### 实现内容
+
+- Remote URL 校验拆分为 syntax / supported 两层，当前仅支持 HTTPS；拒绝 `ftp://`、`file://`、`http://`、无 hostname、控制字符和无效 URL。
+- Remote identity 使用规范化 host/owner/repository 比较，`.git` 与非 `.git` 形式视为同仓库。
+- 修改 Remote URL 时，仅当仓库 identity 变化才询问保留或清除 Token；等价 URL 规范化不提示。
+- 删除 Remote 时二次确认是否同时删除对应 Keychain credential；默认不偷偷删除。
+- Token 状态区分未配置、已配置未验证、验证成功、验证失败和权限不足；主动检查时调用 GitHub API 并刷新远端状态。
+
+### 验证结果
+
+- `verify-remote-validation.ts`：通过。
+- `verify-token-status.ts`：通过。
+- `verify-remote-token-lifecycle.ts`：通过。
+- TypeScript diagnostics：0 errors。
 
 ## 2026/09/07 GitSyncHistory 长期存储裁剪
 
@@ -308,3 +368,31 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 ### 范围确认
 
 本轮未修改 Push、Force Push、Compare 对齐算法、ProjectRegistry、credential 或 UI。
+
+## 2026/09/07 Remote 删除后状态一致性
+
+### 修改文件
+
+- `src/ui/SourceControlSettingsView.tsx`
+- `src/ui/SourceControlRemoteView.tsx`
+- `verify-remote-delete-consistency.ts`
+- `docs/refactor-record.md`
+
+### 实现内容
+
+- Settings 删除 Remote 成功后统一重新读取 `remotes`、current branch、repository status、Remote branches、credential、`tokenStatus` 与 ahead/behind。
+- 删除 Remote + Token 时，删除成功后状态立即归零并显示 `not-configured`；仅删除 Remote 时保留对应 Keychain credential，并显示“已配置，未绑定 Remote”。
+- Settings 的状态读取增加 request sequence；删除/清除 Token 会使删除前已发出的旧请求失效。
+- Remote 页面增加 request sequence，旧的 reload/fetch 结果不能覆盖最新状态；Push / Pull / Force Push 完成后的状态更新统一经过受保护的 reload。
+- 从 Remote 页面进入 Settings 返回后显式重新读取 Remote；删除后清空旧 URL、分支和 ahead/behind。
+
+### 验证结果
+
+- `scripting-ts run verify-remote-delete-consistency.ts`：13 项断言通过，覆盖删除 Remote + Token、仅删除 Remote、取消删除、删除后重新添加 Remote，以及旧请求晚返回。
+- `verify-remote-token-lifecycle.ts`：通过。
+- `verify-ui-race-fixes.ts`：通过。
+- TypeScript diagnostics：0 errors。
+
+### 范围确认
+
+本轮未修改 Git Core、credential key、Push / Pull / Force Push 实现、ProjectRegistry 或 UI Design System。

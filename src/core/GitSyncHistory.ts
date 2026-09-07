@@ -6,6 +6,7 @@ export { hashString } from "./identity/hash"
 
 const SYNC_HISTORY_DIR = `${FileManager.appGroupDocumentsDirectory}/source-control-sync-history`
 const SYNC_HISTORY_FILE = `${SYNC_HISTORY_DIR}/records.json`
+const MAX_SYNC_RECORDS = 200
 
 type SyncHistoryStore = Record<string, GitSyncRecord[]>
 
@@ -32,6 +33,17 @@ export function resolveSyncIdentity(projectIdOrPath: string): string {
 
 function key(projectIdOrPath: string, remoteName: string, branchName: string): string {
   return `${resolveSyncIdentity(projectIdOrPath)}:${remoteName}:${branchName}`
+}
+
+export function trimSyncRecords(records: GitSyncRecord[]): GitSyncRecord[] {
+  const sorted = [...records].sort((a, b) => b.syncedAt - a.syncedAt)
+  const recent = sorted.slice(0, MAX_SYNC_RECORDS)
+  if (recent.some((record) => record.kind === "baseline")) return recent
+
+  const latestBaseline = sorted.find((record) => record.kind === "baseline")
+  return latestBaseline
+    ? [...recent, latestBaseline].sort((a, b) => b.syncedAt - a.syncedAt)
+    : recent
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -94,7 +106,7 @@ async function migrateSyncHistoryLocked(oldPath: string, projectId: string): Pro
       const oldRecords = store[storeKey] || []
       const mergedMap = new Map<string, GitSyncRecord>()
       for (const record of [...existing, ...oldRecords]) mergedMap.set(record.targetOid, record)
-      store[newKey] = Array.from(mergedMap.values()).sort((a, b) => b.syncedAt - a.syncedAt)
+      store[newKey] = trimSyncRecords(Array.from(mergedMap.values()))
       delete store[storeKey]
       changed = true
     }
@@ -174,7 +186,7 @@ export async function recordSync(projectIdOrPath: string, record: GitSyncRecord)
     const existingIndex = current.findIndex((item) => item.targetOid === record.targetOid)
     if (existingIndex >= 0) current[existingIndex] = record
     else current.push(record)
-    store[storeKey] = current.sort((a, b) => b.syncedAt - a.syncedAt)
+    store[storeKey] = trimSyncRecords(current)
     await writeStore(store)
   })
 }

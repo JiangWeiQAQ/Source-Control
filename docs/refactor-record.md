@@ -282,3 +282,29 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 ### 范围确认
 
 本轮未修改 Git push/pull、ProjectRegistry、UI、credential 或 Compare 算法。
+
+## 2026/09/07 GitSyncHistory 长期存储裁剪
+
+### 修改文件
+
+- `src/core/GitSyncHistory.ts`
+- `verify-sync-history-retention.ts`
+- `docs/refactor-record.md`
+
+### 实现内容
+
+- 新增 `trimSyncRecords(records)` helper。
+- 每个 `project + remote + branch` bucket 在 `recordSync()` 写入前按 `syncedAt` 倒序排序，并截取最近 200 条。
+- 如果最近 200 条中没有 `kind: "baseline"`，额外保留该 bucket 中最近一条有效 baseline，因此该特殊情况下最多 201 条。
+- legacy sync history 迁移合并写回时同样应用裁剪规则。
+- 保留现有文件级 Promise 锁，确保并发 `recordSync()` 的 `read → modify → trim → write` 不丢记录。
+
+### 验证结果
+
+- `verify-sync-history-retention.ts`：专项验证全部通过，覆盖少于 200 条不裁剪、超过 200 条保留最近记录、push / force-push 顺序、baseline 保留、不同 project/remote/branch 隔离以及并发裁剪。
+- `verify-json-store-sync-history.ts`：既有 JsonStore / GitSyncHistory 专项验证通过。
+- TypeScript diagnostics：0 errors。
+
+### 范围确认
+
+本轮未修改 Push、Force Push、Compare 对齐算法、ProjectRegistry、credential 或 UI。

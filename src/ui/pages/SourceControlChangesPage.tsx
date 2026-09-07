@@ -146,7 +146,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
         await openSettings()
         return
       }
-      await Navigation.present(<SourceControlRemoteView gitService={service} onChanged={loadStatus} onOpenSettings={openSettings} />)
+      await Navigation.present(<SourceControlRemoteView gitService={service} projectPath={projectPath} onChanged={loadStatus} onOpenSettings={openSettings} />)
       await loadStatus()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)

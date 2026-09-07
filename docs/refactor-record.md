@@ -396,3 +396,36 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 ### 范围确认
 
 本轮未修改 Git Core、credential key、Push / Pull / Force Push 实现、ProjectRegistry 或 UI Design System。
+
+## 2026/09/07 Settings / Remote Remote 状态加载收敛
+
+### 修改文件
+
+- `src/ui/useRemoteStatus.ts`
+- `src/ui/SourceControlSettingsView.tsx`
+- `src/ui/SourceControlRemoteView.tsx`
+- `src/ui/pages/SourceControlChangesPage.tsx`
+- `src/ui/index.ts`
+- `verify-remote-status.ts`
+- `docs/refactor-record.md`
+
+### 实现内容
+
+- 新增小型 `useRemoteStatus()` 与 `readRemoteStatus()`，统一读取 `remotes`、selected Remote、Remote branches、current branch、credential、credential binding、ahead/behind、loading、error 和 latest-request-wins。
+- Settings 保留 `checked` 与主动 GitHub Token 验证结果的页面语义；Remote 页面按需读取 `hasLocalCommit`。共享 hook 不包含 Push、Pull、Force Push、Dialog 或 Navigation。
+- 统一 preferred Remote → `origin` → 首个 Remote 的选择规则；删除 Remote 后可按 Remote name 继续读取未绑定的 Keychain credential。
+- Settings 与 Remote 的添加、修改、删除、Token、Check、Fetch 和 Settings 返回刷新均改用共享 refresh；Remote 页面将过期刷新结果视为 `null`，不会继续驱动操作。
+- Remote 页面接收 `projectPath`，用于项目切换时使旧异步请求失效。
+
+### 验证结果
+
+- `verify-remote-status.ts`：通过，覆盖两页面投影一致、origin fallback、preferred fallback、无 Remote、仅删除 Remote 的未绑定 credential，以及旧请求晚返回。
+- `verify-remote-delete-consistency.ts`：通过。
+- `verify-remote-token-lifecycle.ts`：通过。
+- `verify-ui-race-fixes.ts`：通过。
+- 全项目 TypeScript diagnostics：0 errors。
+
+### 范围确认
+
+本轮未修改 Git Core、credential key、RemoteValidation、ProjectRegistry、Push / Pull / Force Push Core 或 UI Design System。
+

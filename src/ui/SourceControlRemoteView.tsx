@@ -1,5 +1,6 @@
-import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
-import { GitAheadBehind, GitRemoteBranch, GitRemoteInfo } from "../core/types"
+import { Button, HStack, Image, List, NavigationStack, ProgressView, Section, Spacer, Text, useState, VStack } from "scripting"
+import { GitAheadBehind } from "../core/types"
+import { RemoteStatusState, useRemoteStatus } from "./useRemoteStatus"
 import { CloseButton } from "./CloseButton"
 import { GitService } from "../core/GitService"
 import { useTranslator } from "./useLocalization"
@@ -7,74 +8,26 @@ import { useUISettings } from "./useUISettings"
 
 export interface SourceControlRemoteViewProps {
   gitService: GitService
+  projectPath?: string
   onChanged: () => Promise<void>
   onOpenSettings?: () => Promise<void>
 }
 
 type ActiveOperation = "push" | "pull" | "force-push" | null
-type RemoteState = {
-  remotes: GitRemoteInfo[]
-  selected: GitRemoteInfo | null
-  branches: GitRemoteBranch[]
-  branch: string | null
-  sync: GitAheadBehind | null
-  hasLocalCommit: boolean
-}
 
-const emptyState: RemoteState = {
-  remotes: [],
-  selected: null,
-  branches: [],
-  branch: null,
-  sync: null,
-  hasLocalCommit: false,
-}
+type RemoteState = Pick<RemoteStatusState, "remotes" | "selected" | "branches" | "branch" | "aheadBehind" | "hasLocalCommit">
 
-export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings }: SourceControlRemoteViewProps) {
+export function SourceControlRemoteView({ gitService, projectPath, onChanged, onOpenSettings }: SourceControlRemoteViewProps) {
   const { t } = useTranslator()
   const { tokens } = useUISettings()
-  const dismiss = Navigation.useDismiss()
-  const [state, setState] = useState<RemoteState>(emptyState)
-  const [loading, setLoading] = useState(true)
+  const remoteStatus = useRemoteStatus(gitService, projectPath, { initialLoading: true, includeLocalCommit: true })
+  const state: RemoteState = remoteStatus
+  const { loading, error: remoteStatusError, refresh: refreshRemoteStatus, reset: resetRemoteStatus } = remoteStatus
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null)
   const [forcePushLock] = useState({ active: false })
-  const [requestSequence] = useState({ value: 0 })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const busy = activeOperation !== null
   const selectedRemote = state.selected
-
-  const readState = async (preferred: string | null): Promise<RemoteState> => {
-    const remotes = await gitService.listRemotes()
-    const selected = preferred && remotes.some((remote) => remote.name === preferred)
-      ? remotes.find((remote) => remote.name === preferred) || null
-      : remotes.find((remote) => remote.name === "origin") || remotes[0] || null
-    const branch = await gitService.getCurrentBranch()
-    const branches = selected ? await gitService.listRemoteBranches(selected.name) : []
-    const hasLocalCommit = (await gitService.getHistory(1)).length > 0
-    const sync = branch && selected && branches.some((item) => item.name === branch)
-      ? await gitService.getAheadBehind(selected.name, branch)
-      : null
-    return { remotes, selected, branches, branch, sync, hasLocalCommit }
-  }
-
-  const reloadRemoteState = async (preferred?: string | null) => {
-    const requestId = ++requestSequence.value
-    setLoading(true)
-    setErrorMessage(null)
-    try {
-      const next = await readState(preferred ?? null)
-      if (requestId !== requestSequence.value) return
-      setState(next)
-    } catch (error) {
-      if (requestId === requestSequence.value) setErrorMessage(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (requestId === requestSequence.value) setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    reloadRemoteState().catch(console.error)
-  }, [])
 
   const notifyChanged = async () => {
     try {
@@ -87,10 +40,9 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   const handleOpenSettings = async () => {
     if (!onOpenSettings) return
     const preferredRemote = selectedRemote?.name ?? null
-    requestSequence.value += 1
+    resetRemoteStatus()
     await onOpenSettings()
-    setState(emptyState)
-    await reloadRemoteState(preferredRemote)
+    await refreshRemoteStatus({ preferredRemoteName: preferredRemote })
   }
 
   const syncStateMessage = (sync: GitAheadBehind | null): string => {
@@ -101,12 +53,18 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     return t("syncedToGithub")
   }
 
-  const fetchLatestState = async (remoteName: string): Promise<RemoteState> => {
-    const requestId = ++requestSequence.value
+  const fetchLatestState = async (remoteName: string): Promise<RemoteState | null> => {
     await gitService.fetchRemote(remoteName)
-    const latest = await readState(remoteName)
-    if (requestId === requestSequence.value) setState(latest)
-    return latest
+    const latest = await refreshRemoteStatus({ preferredRemoteName: remoteName })
+    if (!latest) return null
+    return {
+      remotes: latest.remotes,
+      selected: latest.selected,
+      branches: latest.branches,
+      branch: latest.branch,
+      aheadBehind: latest.aheadBehind,
+      hasLocalCommit: latest.hasLocalCommit,
+    }
   }
 
   const pushBranch = async (remoteName: string, branch: string) => {
@@ -114,7 +72,8 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     setErrorMessage(null)
     try {
       const latest = await fetchLatestState(remoteName)
-      const sync = latest.sync
+      if (!latest) return
+      const sync = latest.aheadBehind
       if (latest.branches.length > 0 && sync) {
         if (sync.diverged || (sync.ahead > 0 && sync.behind > 0)) {
           setErrorMessage(`${t("divergedMessage")}\n${syncStateMessage(sync)}`)
@@ -130,14 +89,14 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
         }
       }
       await gitService.pushRemote(remoteName, branch)
-      await reloadRemoteState(remoteName)
+      await refreshRemoteStatus({ preferredRemoteName: remoteName })
       await notifyChanged()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (/remote changed|non-fast-forward|not a simple fast-forward|fast-forward/i.test(message)) {
         try {
           const latest = await fetchLatestState(remoteName)
-          setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.sync)}`)
+          if (latest) setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.aheadBehind)}`)
           await notifyChanged()
         } catch (refreshError) {
           setErrorMessage(refreshError instanceof Error ? refreshError.message : String(refreshError))
@@ -156,7 +115,8 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     setErrorMessage(null)
     try {
       const latest = await fetchLatestState(selectedRemote.name)
-      const sync = latest.sync
+      if (!latest) return
+      const sync = latest.aheadBehind
       if (latest.branches.length > 0 && sync && (sync.ahead === 0 || sync.behind > 0 || sync.diverged)) {
         setErrorMessage(syncStateMessage(sync))
         return
@@ -169,14 +129,14 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
       })
       if (!confirmed) return
       await gitService.pushRemote(selectedRemote.name, latest.branch || state.branch)
-      await reloadRemoteState(selectedRemote.name)
+      await refreshRemoteStatus({ preferredRemoteName: selectedRemote.name })
       await notifyChanged()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (/remote changed|non-fast-forward|not a simple fast-forward|fast-forward/i.test(message)) {
         try {
           const latest = await fetchLatestState(selectedRemote.name)
-          setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.sync)}`)
+          if (latest) setErrorMessage(`${t("remoteChangedDuringSync")}\n${syncStateMessage(latest.aheadBehind)}`)
           await notifyChanged()
         } catch (refreshError) {
           setErrorMessage(refreshError instanceof Error ? refreshError.message : String(refreshError))
@@ -195,9 +155,10 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     setActiveOperation("force-push")
     setErrorMessage(null)
     try {
-      if (!selectedRemote || !state.branch || !state.sync || state.sync.ahead === 0 || state.sync.behind === 0) return
+      if (!selectedRemote || !state.branch || !state.aheadBehind || state.aheadBehind.ahead === 0 || state.aheadBehind.behind === 0) return
       const latest = await fetchLatestState(selectedRemote.name)
-      const sync = latest.sync
+      if (!latest) return
+      const sync = latest.aheadBehind
       if (!sync || sync.ahead === 0 || sync.behind === 0 || !sync.localOid || !sync.remoteOid) {
         setErrorMessage(syncStateMessage(sync))
         return
@@ -223,9 +184,9 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     setErrorMessage(null)
     try {
       const latest = await fetchLatestState(selectedRemote.name)
-      if (!latest.sync || latest.sync.ahead > 0 || latest.sync.diverged || latest.sync.behind === 0) return
+      if (!latest || !latest.aheadBehind || latest.aheadBehind.ahead > 0 || latest.aheadBehind.diverged || latest.aheadBehind.behind === 0) return
       await gitService.pullRemote(selectedRemote.name, latest.branch || state.branch)
-      await reloadRemoteState(selectedRemote.name)
+      await refreshRemoteStatus({ preferredRemoteName: selectedRemote.name })
       await notifyChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -235,19 +196,21 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   }
 
   const syncContent = () => {
-    if (!state.sync) {
+    if (!state.aheadBehind) {
       if (state.branches.length === 0 && state.hasLocalCommit) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("emptyGithubRepository")}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
       return <Text font="headline">{state.branches.length === 0 ? t("emptyGithubRepository") : t("repositoryInspection")}</Text>
     }
-    if (state.sync.diverged || (state.sync.ahead > 0 && state.sync.behind > 0)) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("githubHasNewerVersions").replace("{count}", String(state.sync.behind))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text><Button title={activeOperation === "force-push" ? t("pushing") : t("forcePushLocal")} systemImage="exclamationmark.triangle" buttonStyle="borderedProminent" disabled={busy} action={forcePushLocal} /></VStack>
-    if (state.sync.ahead === 0 && state.sync.behind > 0) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("githubHasNewerVersions").replace("{count}", String(state.sync.behind))}</Text><Button title={activeOperation === "pull" ? t("pulling") : t("pullCloudVersion")} buttonStyle="borderedProminent" disabled={busy} action={pullRemote} /></VStack>
-    if (state.sync.ahead === 0 && state.sync.behind === 0) return <Text font="headline">✓ {t("syncedToGithub")}</Text>
-    return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(state.sync.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
+    if (state.aheadBehind.diverged || (state.aheadBehind.ahead > 0 && state.aheadBehind.behind > 0)) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("divergedMessage")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("localVersionsWaiting").replace("{count}", String(state.aheadBehind.ahead))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("githubHasNewerVersions").replace("{count}", String(state.aheadBehind.behind))}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("automaticMergeUnavailable")}</Text><Button title={activeOperation === "force-push" ? t("pushing") : t("forcePushLocal")} systemImage="exclamationmark.triangle" buttonStyle="borderedProminent" disabled={busy} action={forcePushLocal} /></VStack>
+    if (state.aheadBehind.ahead === 0 && state.aheadBehind.behind > 0) return <VStack spacing={6} alignment="leading"><Text font="headline">{t("githubHasNewerVersions").replace("{count}", String(state.aheadBehind.behind))}</Text><Button title={activeOperation === "pull" ? t("pulling") : t("pullCloudVersion")} buttonStyle="borderedProminent" disabled={busy} action={pullRemote} /></VStack>
+    if (state.aheadBehind.ahead === 0 && state.aheadBehind.behind === 0) return <Text font="headline">✓ {t("syncedToGithub")}</Text>
+    return <VStack spacing={6} alignment="leading"><Text font="headline">{t("localVersionsWaiting").replace("{count}", String(state.aheadBehind.ahead))}</Text><Button title={activeOperation === "push" ? t("pushing") : t("syncToGitHub")} buttonStyle="borderedProminent" disabled={busy} action={syncToGithub} /></VStack>
   }
 
+  const displayedError = errorMessage ?? remoteStatusError
+
   return <NavigationStack>
-    <List navigationTitle={t("manageGithubSync")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || busy} action={() => reloadRemoteState(selectedRemote?.name)} /> }}>
-    {errorMessage ? <Section><VStack spacing={5} alignment="leading"><HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">{t("remoteUpdateFailed")}</Text></HStack><Text font="footnote" foregroundStyle="red">{errorMessage}</Text></VStack></Section> : null}
+    <List navigationTitle={t("manageGithubSync")} toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <Button title={t("refresh")} systemImage="arrow.clockwise" disabled={loading || busy} action={() => refreshRemoteStatus({ preferredRemoteName: selectedRemote?.name ?? null })} /> }}>
+    {displayedError ? <Section><VStack spacing={5} alignment="leading"><HStack spacing={6}><Image systemName="exclamationmark.triangle.fill" foregroundStyle="red" /><Text font="headline" foregroundStyle="red">{t("remoteUpdateFailed")}</Text></HStack><Text font="footnote" foregroundStyle="red">{displayedError}</Text></VStack></Section> : null}
     {loading ? <Section><VStack spacing={10} alignment="center"><ProgressView /><Text font="footnote" foregroundStyle="secondaryLabel">{t("fetching")}</Text></VStack></Section> : null}
     {!loading && !selectedRemote ? <Section><VStack spacing={8} alignment="leading"><Text font="headline">{t("notConnected")}</Text><Text font="footnote" foregroundStyle="secondaryLabel">{t("noRemoteHint")}</Text></VStack></Section> : null}
     {!loading && selectedRemote ? <>

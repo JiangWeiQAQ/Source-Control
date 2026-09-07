@@ -250,6 +250,35 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 2. **Push 远端验证**：使用当前项目实际 remote（`Source-Control`）和分支（`master`）执行 `pushRemote`，推送成功（`pushed: true`），远端 OID 成功从 `c8081721a9242b95beff71573ff6d15c78810655` 更新为 `50b68d86699783d9769fb5420ec13ff3e0a8ee8d`。
 3. **TypeScript 诊断**：全项目 0 errors。
 4. **回归测试**：`verify-project-registry.ts` 27 项断言全部通过（100%）。
+## 2026/09/07 JsonStore 与 GitSyncHistory 数据安全增强
 
+### 修改文件
 
+- `src/core/storage/JsonStore.ts`
+- `src/core/GitSyncHistory.ts`
+- `verify-json-store-sync-history.ts`
 
+### 实现内容
+
+- `JsonStore` 新增 `readStrict()` 与 `readOrFallback()`；旧 `read()` 保留兼容语义。
+- `writeAtomic()` 使用 timestamp + random 临时文件名，写入后读回并 `JSON.parse` 自校验。
+- 原文件先重命名为 backup；新文件替换失败时恢复 backup，成功后清理 backup/temp。
+- 写入前清理超过 24 小时的 `${basename}.tmp.*` 临时文件，并兼容 Scripting `FileStat.modificationDate` 的秒/毫秒时间单位。
+- `GitSyncHistory` 的 `read → modify → write` 路径统一使用同一文件级 Promise 锁，锁在 rejection 后仍可继续工作；`recordSync()`、`ensureBaseline()`、`migrateSyncHistory()` 和带迁移的查询均协调使用该锁。
+- 同步历史根结构损坏时抛错；单个 bucket 或单条 `GitSyncRecord` 无效时跳过并输出诊断。
+- 记录校验：必填字符串非空；`syncedAt`、`commitsUploaded` 必须为有限数字；`commitsUploaded` 不得为负数；`previousRemoteOid` 必须为字符串；`kind` 限定为 `push`、`baseline` 或 `force-push`。
+
+### 验证结果
+
+- `verify-json-store-sync-history.ts`：专项场景全部通过（损坏 JSON、序列化失败原文件保持、并发 recordSync 不丢记录、单条无效记录跳过、整体结构损坏报错）。
+- `verify-project-relocation.ts`：19/19 通过。
+- `verify-project-registry.ts`：27/27 通过。
+- `verify-push-core.ts`：通过。
+- `verify-force-push-local.ts`：通过。
+- `verify-release.ts`：通过。
+- TypeScript diagnostics：0 errors。
+- `verify-restore-commit.ts`、`verify-reset-commit.ts`：当前项目根目录不存在这些脚本，无法执行；未因本轮修改新增或删除。
+
+### 范围确认
+
+本轮未修改 Git push/pull、ProjectRegistry、UI、credential 或 Compare 算法。

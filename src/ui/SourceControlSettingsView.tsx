@@ -8,7 +8,7 @@ import { ErrorSection } from "./components/ErrorSection"
 import { LoadingSection } from "./components/LoadingSection"
 import { SourceControlReleaseView } from "./SourceControlReleaseView"
 import { SourceControlProjectConfigView } from "./SourceControlProjectConfigView"
-import { formatRemoteRepository, validateRemoteUrl } from "../core/remote/RemoteValidation"
+import { formatRemoteRepository, validateRemoteUrl, validateSupportedRemoteUrl, remoteRepositoryIdentity, checkGithubToken, GithubTokenStatus } from "../core/remote/RemoteValidation"
 import { AppLanguage, LanguagePreference, getLanguagePreference, setLanguagePreference } from "./localization"
 import { useTranslator } from "./useLocalization"
 import { UIDensity } from "./design"
@@ -29,6 +29,7 @@ type GithubSettingsState = {
   status: GitRepositoryStatus | null
   sync: GitAheadBehind | null
   credential: boolean
+  tokenStatus: GithubTokenStatus
   checked: boolean
 }
 
@@ -42,6 +43,7 @@ const emptyGithubState: GithubSettingsState = {
   status: null,
   sync: null,
   credential: false,
+  tokenStatus: "configured-unverified",
   checked: false,
 }
 
@@ -87,6 +89,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const [githubState, setGithubState] = useState<GithubSettingsState>(emptyGithubState)
   const [loading, setLoading] = useState(false)
   const [operation, setOperation] = useState<SettingsOperation>(null)
+  const [forcePushLock] = useState({ active: false })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [releaseVersion, setReleaseVersion] = useState<string | null>(null)
   const [releaseVersionError, setReleaseVersionError] = useState<string | null>(null)
@@ -117,7 +120,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       const credential = selected && isHttps(selected.url) ? await gitService.hasRemoteCredential(selected.name) : false
       const branch = await gitService.getCurrentBranch().catch(() => null)
       const status = await gitService.getStatus().catch(() => null)
-      setGithubState({ ...emptyGithubState, remotes, selected, credential, branch, status })
+      setGithubState({ ...emptyGithubState, remotes, selected, tokenStatus: credential ? "configured-unverified" : "not-configured", branch, status })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
@@ -148,11 +151,18 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       confirmLabel: copy(language, "添加", "Add"),
     })
     if (url === null || !url.trim()) return
+    let validatedUrl: string
+    try {
+      validatedUrl = validateSupportedRemoteUrl(url)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+      return
+    }
 
     setOperation("remote")
     setErrorMessage(null)
     try {
-      await gitService.addRemote(name.trim(), url.trim())
+      await gitService.addRemote(name.trim(), validatedUrl)
       await loadGithubConfiguration()
       await notifyRemoteChanged()
     } catch (error) {
@@ -174,10 +184,25 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     })
     if (url === null || !url.trim() || url.trim() === selectedRemote.url) return
 
+    let validatedUrl: string
+    let clearTokenAfterUpdate = false
+    try {
+      validatedUrl = validateSupportedRemoteUrl(url)
+      if (remoteRepositoryIdentity(selectedRemote.url) !== remoteRepositoryIdentity(validatedUrl) && githubState.credential) {
+        const choice = await Dialog.actionSheet({ title: copy(language, "Remote 已变化", "Remote Changed"), message: copy(language, "请选择当前 Token 的处理方式", "Choose what to do with the current token"), actions: [{ label: copy(language, "保留当前 Token", "Keep Token") }, { label: copy(language, "清除 Token", "Clear Token"), destructive: true }, { label: t("cancel") }] })
+        if (choice === 1) clearTokenAfterUpdate = true
+        if (choice !== 0 && choice !== 1) return
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+      return
+    }
+
     setOperation("remote")
     setErrorMessage(null)
     try {
-      await gitService.setRemoteUrl(selectedRemote.name, url.trim())
+      await gitService.setRemoteUrl(selectedRemote.name, validatedUrl)
+      if (clearTokenAfterUpdate) await gitService.removeRemoteCredential(selectedRemote.name)
       await loadGithubConfiguration()
       await notifyRemoteChanged()
     } catch (error) {
@@ -204,7 +229,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     try {
       await gitService.setRemoteCredential(selectedRemote.name, { username: "x-access-token", password: token.trim() })
       const credential = await gitService.hasRemoteCredential(selectedRemote.name)
-      setGithubState((current) => ({ ...current, credential }))
+      setGithubState((current) => ({ ...current, credential, tokenStatus: credential ? "configured-unverified" : "not-configured" }))
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -226,7 +251,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     setErrorMessage(null)
     try {
       await gitService.removeRemoteCredential(selectedRemote.name)
-      setGithubState((current) => ({ ...current, credential: false }))
+      setGithubState((current) => ({ ...current, credential: false, tokenStatus: "not-configured" }))
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -235,6 +260,30 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     }
   }
 
+  const removeRemote = async () => {
+    if (!gitService || !selectedRemote || busy) return
+    const selected = await Dialog.actionSheet({
+      title: copy(language, "删除 Remote？", "Remove Remote?"),
+      message: copy(language, "是否同时删除该 Remote 的访问令牌？", "Should the access token for this Remote also be deleted?"),
+      actions: [
+        { label: copy(language, "删除 Remote 和 Token", "Remove Remote and Token"), destructive: true },
+        { label: copy(language, "仅删除 Remote", "Remove Remote Only") },
+      ],
+    })
+    if (selected !== 0 && selected !== 1) return
+    setOperation("remote")
+    setErrorMessage(null)
+    try {
+      await gitService.removeRemote(selectedRemote.name)
+      if (selected === 0) await gitService.removeRemoteCredential(selectedRemote.name)
+      await loadGithubConfiguration()
+      await notifyRemoteChanged()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setOperation(null)
+    }
+  }
   const manageToken = async () => {
     if (!githubState.credential) {
       await setToken()
@@ -256,18 +305,22 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     setOperation("check")
     setErrorMessage(null)
     try {
+      const token = await gitService.getRemoteCredential(selectedRemote.name)
+      if (!token) {
+        setGithubState((current) => ({ ...current, credential: false, tokenStatus: "not-configured", checked: true }))
+        return
+      }
+      const tokenCheck = await checkGithubToken(token.password, selectedRemote.url)
       await gitService.fetchRemote(selectedRemote.name)
-      const [remotes, branch, branches, status, history] = await Promise.all([
+      const [remotes, branch, branches, status] = await Promise.all([
         gitService.listRemotes(),
         gitService.getCurrentBranch(),
         gitService.listRemoteBranches(selectedRemote.name),
         gitService.getStatus(),
-        gitService.getHistory(1),
       ])
       const refreshedRemote = remotes.find((remote) => remote.name === selectedRemote.name) ?? selectedRemote
       const sync = branch && branches.some((item) => item.name === branch) ? await gitService.getAheadBehind(selectedRemote.name, branch) : null
-      const credential = isHttps(refreshedRemote.url) ? await gitService.hasRemoteCredential(refreshedRemote.name) : false
-      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential, checked: true })
+      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential: true, tokenStatus: tokenCheck.status, checked: true })
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -291,7 +344,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       const refreshedRemote = remotes.find((remote) => remote.name === selectedRemote.name) ?? selectedRemote
       const sync = branch && branches.some((item) => item.name === branch) ? await gitService.getAheadBehind(selectedRemote.name, branch) : null
       const credential = isHttps(refreshedRemote.url) ? await gitService.hasRemoteCredential(refreshedRemote.name) : false
-      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential, checked: true })
+      setGithubState({ remotes, selected: refreshedRemote, branches, branch, status, sync, credential, tokenStatus: credential ? "configured-unverified" : "not-configured", checked: true })
       await notifyRemoteChanged()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -317,42 +370,45 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   }
 
   const forcePushToGithub = async () => {
-    if (!gitService || !selectedRemote || busy) return
-    const branch = githubState.branch || (await gitService.getCurrentBranch())
-    if (!branch) {
-      setErrorMessage("Force Push requires a local branch.")
-      return
-    }
-    const status = await gitService.getStatus()
-    if (!status.isClean) {
-      setErrorMessage(copy(language, "工作区不干净，请先提交或还原未保存修改。", "Working tree is dirty. Commit or discard changes before force pushing."))
-      return
-    }
-    const sync = githubState.sync || (await gitService.getAheadBehind(selectedRemote.name, branch))
-    const firstConfirm = await Dialog.confirm({
-      title: copy(language, "以本地版本为准？", "Use Local Version as Source of Truth?"),
-      message: copy(language, "GitHub 上当前分支的独立版本将被本地历史替换。\n\n本地版本不会删除。", "The remote branch history on GitHub will be overwritten with local history.\n\nLocal history will not be deleted."),
-      confirmLabel: copy(language, "下一步", "Next"),
-      cancelLabel: t("cancel"),
-    })
-    if (!firstConfirm) return
-
-    const secondConfirm = await Dialog.confirm({
-      title: copy(language, "确认覆盖 GitHub？", "Confirm Overwriting GitHub?"),
-      message: `${copy(language, "GitHub 当前：", "GitHub Current: ")}${sync?.remoteOid?.slice(0, 7) ?? "unknown"}\n${copy(language, "本地当前：", "Local Current: ")}${sync?.localOid?.slice(0, 7) ?? "unknown"}\n\n${copy(language, "此操作会重写 GitHub 分支历史。", "This will rewrite GitHub branch history.")}`,
-      confirmLabel: copy(language, "确认覆盖", "Overwrite GitHub"),
-      cancelLabel: t("cancel"),
-    })
-    if (!secondConfirm) return
-
+    if (forcePushLock.active) return
+    forcePushLock.active = true
     setOperation("force-push")
     setErrorMessage(null)
     try {
+      if (!gitService || !selectedRemote) return
+      const branch = githubState.branch || (await gitService.getCurrentBranch())
+      if (!branch) {
+        setErrorMessage("Force Push requires a local branch.")
+        return
+      }
+      const status = await gitService.getStatus()
+      if (!status.isClean) {
+        setErrorMessage(copy(language, "工作区不干净，请先提交或还原未保存修改。", "Working tree is dirty. Commit or discard changes before force pushing."))
+        return
+      }
+      const sync = githubState.sync || (await gitService.getAheadBehind(selectedRemote.name, branch))
+      const firstConfirm = await Dialog.confirm({
+        title: copy(language, "以本地版本为准？", "Use Local Version as Source of Truth?"),
+        message: copy(language, "GitHub 上当前分支的独立版本将被本地历史替换。\n\n本地版本不会删除。", "The remote branch history on GitHub will be overwritten with local history.\n\nLocal history will not be deleted."),
+        confirmLabel: copy(language, "下一步", "Next"),
+        cancelLabel: t("cancel"),
+      })
+      if (!firstConfirm) return
+
+      const secondConfirm = await Dialog.confirm({
+        title: copy(language, "确认覆盖 GitHub？", "Confirm Overwriting GitHub?"),
+        message: `${copy(language, "GitHub 当前：", "GitHub Current: ")}${sync?.remoteOid?.slice(0, 7) ?? "unknown"}\n${copy(language, "本地当前：", "Local Current: ")}${sync?.localOid?.slice(0, 7) ?? "unknown"}\n\n${copy(language, "此操作会重写 GitHub 分支历史。", "This will rewrite GitHub branch history.")}`,
+        confirmLabel: copy(language, "确认覆盖", "Overwrite GitHub"),
+        cancelLabel: t("cancel"),
+      })
+      if (!secondConfirm) return
+
       await gitService.forcePushLocalToRemote(selectedRemote.name, branch)
       await checkGithubStatus()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
+      forcePushLock.active = false
       setOperation(null)
     }
   }
@@ -429,6 +485,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
 
   const preferenceLabel = preference === "system" ? "System" : preference === "zh-Hans" ? "简体中文" : "English"
   const currentDensityLabel = densityLabel(density, language)
+  const tokenStatusLabel = githubState.tokenStatus === "not-configured" ? copy(language, "未配置", "Not Configured") : githubState.tokenStatus === "configured-unverified" ? copy(language, "已配置，未验证", "Configured, Not Verified") : githubState.tokenStatus === "valid" ? copy(language, "验证成功", "Verified") : githubState.tokenStatus === "invalid" ? copy(language, "验证失败", "Verification Failed") : copy(language, "权限不足", "Insufficient Permission")
   const statusLabel = githubStatusLabel(githubState, language)
 
   return (
@@ -469,7 +526,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
               <SettingsRow
                 icon="key"
                 title={copy(language, "访问令牌", "Access Token")}
-                subtitle={githubState.credential ? copy(language, "已配置", "Configured") : copy(language, "未配置", "Not Configured")}
+                subtitle={tokenStatusLabel}
                 onPress={manageToken}
                 disabled={busy || !isHttps(selectedRemote.url)}
               />
@@ -482,7 +539,14 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
                   action={removeToken}
                 />
               ) : null}
-              <SettingsRow
+              <Button
+                 title={copy(language, "删除 Remote", "Remove Remote")}
+                 systemImage="trash"
+                 role="destructive"
+                 disabled={busy}
+                 action={removeRemote}
+               />
+               <SettingsRow
                 icon="arrow.triangle.branch"
                 title={copy(language, "当前分支", "Current Branch")}
                 subtitle={githubState.branch || copy(language, "未检出分支", "No branch")}

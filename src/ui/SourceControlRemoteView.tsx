@@ -37,6 +37,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   const [state, setState] = useState<RemoteState>(emptyState)
   const [loading, setLoading] = useState(true)
   const [activeOperation, setActiveOperation] = useState<ActiveOperation>(null)
+  const [forcePushLock] = useState({ active: false })
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const busy = activeOperation !== null
   const selectedRemote = state.selected
@@ -175,20 +176,22 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
   }
 
   const forcePushLocal = async () => {
-    if (!selectedRemote || !state.branch || busy || !state.sync || state.sync.ahead === 0 || state.sync.behind === 0) return
-    const latest = await fetchLatestState(selectedRemote.name)
-    const sync = latest.sync
-    if (!sync || sync.ahead === 0 || sync.behind === 0 || !sync.localOid || !sync.remoteOid) {
-      setErrorMessage(syncStateMessage(sync))
-      return
-    }
-    const firstConfirmed = await Dialog.confirm({ title: "以本地版本为准？", message: "GitHub 上当前分支的独立版本将被本地历史替换。\n\n本地版本不会删除。", cancelLabel: t("cancel"), confirmLabel: "继续" })
-    if (!firstConfirmed) return
-    const secondConfirmed = await Dialog.confirm({ title: "确认覆盖 GitHub？", message: `GitHub 当前：${sync.remoteOid.slice(0, 7)}\n本地当前：${sync.localOid.slice(0, 7)}\n\n此操作会重写 GitHub 分支历史。`, cancelLabel: t("cancel"), confirmLabel: "覆盖 GitHub" })
-    if (!secondConfirmed) return
+    if (forcePushLock.active) return
+    forcePushLock.active = true
     setActiveOperation("force-push")
     setErrorMessage(null)
     try {
+      if (!selectedRemote || !state.branch || !state.sync || state.sync.ahead === 0 || state.sync.behind === 0) return
+      const latest = await fetchLatestState(selectedRemote.name)
+      const sync = latest.sync
+      if (!sync || sync.ahead === 0 || sync.behind === 0 || !sync.localOid || !sync.remoteOid) {
+        setErrorMessage(syncStateMessage(sync))
+        return
+      }
+      const firstConfirmed = await Dialog.confirm({ title: "以本地版本为准？", message: "GitHub 上当前分支的独立版本将被本地历史替换。\n\n本地版本不会删除。", cancelLabel: t("cancel"), confirmLabel: "继续" })
+      if (!firstConfirmed) return
+      const secondConfirmed = await Dialog.confirm({ title: "确认覆盖 GitHub？", message: `GitHub 当前：${sync.remoteOid.slice(0, 7)}\n本地当前：${sync.localOid.slice(0, 7)}\n\n此操作会重写 GitHub 分支历史。`, cancelLabel: t("cancel"), confirmLabel: "覆盖 GitHub" })
+      if (!secondConfirmed) return
       await gitService.forcePushLocalToRemote(selectedRemote.name, latest.branch || state.branch)
       const refreshed = await fetchLatestState(selectedRemote.name)
       setState(refreshed)
@@ -196,6 +199,7 @@ export function SourceControlRemoteView({ gitService, onChanged, onOpenSettings 
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {
+      forcePushLock.active = false
       setActiveOperation(null)
     }
   }

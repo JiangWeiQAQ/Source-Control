@@ -44,15 +44,22 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   const [selectedAllFilesFolder, setSelectedAllFilesFolder] = useState("ROOT")
   const [showAllFiles, setShowAllFiles] = useState(false)
   const [allFiles, setAllFiles] = useState<ProjectFileEntry[]>([])
+  const [skippedDirectories, setSkippedDirectories] = useState<string[]>([])
+  const [hasPartialFileScanFailure, setHasPartialFileScanFailure] = useState(false)
   const sectionTitle = (zh: string, en: string) => language === "zh-Hans" ? zh : en
 
   const loadAllFiles = async () => {
     if (!projectPath) {
       setAllFiles([])
+      setSkippedDirectories([])
+      setHasPartialFileScanFailure(false)
       return
     }
     try {
-      setAllFiles(await enumerateProjectFiles(projectPath))
+      const result = await enumerateProjectFiles(projectPath)
+      setAllFiles(result.files)
+      setSkippedDirectories(result.skippedDirectories)
+      setHasPartialFileScanFailure(result.hasPartialFailure)
     } catch {
       console.error("[AllFiles] read failed")
     }
@@ -251,7 +258,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
         <ChangesFileBrowser groups={groups} selectedFolder={selectedFolder} onSelect={setSelectedFolder} service={service} filter={filter} onChanged={loadStatus} disabled={busy} language={language} projectPath={projectPath} />
         <Button title={filter === "staged" ? sectionTitle("全部移出本次版本", "Unstage All") : sectionTitle("全部加入本次版本", "Stage All")} buttonStyle="borderless" disabled={busy} action={() => { operateAll(filter === "staged" ? "unstageAll" : "stageAll").catch(console.error) }} />
       </Section> : null}
-      <AllFilesSection files={allFiles} showAllFiles={showAllFiles} onToggle={() => setShowAllFiles((value) => !value)} selectedFolder={selectedAllFilesFolder} onSelect={setSelectedAllFilesFolder} language={language} />
+      <AllFilesSection files={allFiles} skippedDirectories={skippedDirectories} hasPartialFailure={hasPartialFileScanFailure} showAllFiles={showAllFiles} onToggle={() => setShowAllFiles((value) => !value)} selectedFolder={selectedAllFilesFolder} onSelect={setSelectedAllFilesFolder} language={language} />
     </List>
   </NavigationStack>
 }

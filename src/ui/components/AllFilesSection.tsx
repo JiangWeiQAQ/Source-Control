@@ -1,4 +1,5 @@
 import { Button, Divider, HStack, Image, Section, Spacer, Text, VStack } from "scripting"
+import { AppLanguage, createTranslator } from "../localization"
 import { ProjectFileEntry } from "../projectFiles"
 
 export interface ProjectFileGroup { path: string; files: ProjectFileEntry[] }
@@ -56,8 +57,9 @@ export function AllFilesBrowser({ groups, selectedFolder, onSelect, language }: 
   </HStack>
 }
 
-export function AllFilesSection({ files, showAllFiles, onToggle, selectedFolder, onSelect, language }: { files: ProjectFileEntry[]; showAllFiles: boolean; onToggle: () => void; selectedFolder: string; onSelect: (folder: string) => void; language: "zh-Hans" | "en" }) {
+export function AllFilesSection({ files, skippedDirectories, hasPartialFailure, showAllFiles, onToggle, selectedFolder, onSelect, language }: { files: ProjectFileEntry[]; skippedDirectories: string[]; hasPartialFailure: boolean; showAllFiles: boolean; onToggle: () => void; selectedFolder: string; onSelect: (folder: string) => void; language: AppLanguage }) {
   const groups = projectFileGroups(files)
+  const t = createTranslator(language)
   return <Section header={<Text>{language === "zh-Hans" ? "全部文件" : "All Files"}</Text>}>
     <Button action={onToggle} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
       <HStack spacing={8} alignment="center" frame={{ maxWidth: "infinity", minHeight: 58, alignment: "leading" }} padding={{ horizontal: 14, vertical: 10 }} background="secondarySystemBackground" clipShape={{ type: "rect", cornerRadius: 12 }}>
@@ -66,6 +68,7 @@ export function AllFilesSection({ files, showAllFiles, onToggle, selectedFolder,
         <Spacer /><Image systemName={showAllFiles ? "chevron.up" : "chevron.right"} foregroundStyle="secondaryLabel" />
       </HStack>
     </Button>
-    {showAllFiles ? <AllFilesBrowser groups={groups} selectedFolder={selectedFolder} onSelect={onSelect} language={language} /> : null}
+    {hasPartialFailure ? <VStack spacing={2} alignment="leading" padding={{ top: 6, horizontal: 14, bottom: 6 }}><HStack spacing={6} alignment="center"><Image systemName="exclamationmark.triangle.fill" foregroundStyle="orange" /><Text font="footnote" foregroundStyle="orange">{t("allFilesScanWarning")}</Text></HStack><Text font="caption" foregroundStyle="orange">{t("allFilesSkippedDirectories").replace("{count}", String(skippedDirectories.length))}</Text></VStack> : null}
+     {showAllFiles ? <AllFilesBrowser groups={groups} selectedFolder={selectedFolder} onSelect={onSelect} language={language} /> : null}
   </Section>
 }

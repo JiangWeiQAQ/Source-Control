@@ -1,5 +1,6 @@
 import { Script } from "scripting"
 import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, RELEASE_TEMP_STALE_MS, fileContainsToken, isTextScanFile } from "./src/core/GitHubReleaseService"
+import { isValidVersion, validateVersion } from "./src/core/version"
 import { GitAheadBehind, GitCommitInfo, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus } from "./src/core/types"
 import { GitService } from "./src/core/GitService"
 
@@ -520,7 +521,19 @@ async function run(): Promise<void> {
     if (newExists) await FileManager.remove(newTempPath)
     if (unrelatedExists) await FileManager.remove(unrelatedPath)
 
-    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization", "preflight-limits", "release-mutex-and-cleanup"] })
+    // 验证 18：统一版本号规则校验 (SemVer 2.0)
+    const validVersions = ["1.0.0", "1.2.3", "1.0.0-beta.1", "2.0.0-rc.1", "1.0.0+build.5"]
+    for (const v of validVersions) {
+      assert(isValidVersion(v), `should be valid version: ${v}`)
+      assert(validateVersion(v) === v, `validateVersion should return normalized version: ${v}`)
+    }
+    const invalidVersions = ["01.0.0", "1.01.0", "1.0", "v1.0.0", "", "  ", "abc", "1.0.0.0"]
+    for (const v of invalidVersions) {
+      assert(!isValidVersion(v), `should be invalid version: ${v}`)
+      assert(validateVersion(v) === null, `validateVersion should return null: ${v}`)
+    }
+
+    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization", "preflight-limits", "release-mutex-and-cleanup", "semver-validation"] })
   } finally {
     try {
       if (await FileManager.exists(root)) await FileManager.remove(root)

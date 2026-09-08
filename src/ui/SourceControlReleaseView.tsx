@@ -2,6 +2,7 @@ import { Button, HStack, Image, List, Navigation, NavigationStack, Section, Spac
 import { GitHubReleaseService } from "../core/GitHubReleaseService"
 import { GitService } from "../core/GitService"
 import { GitHubReleaseResult } from "../core/types"
+import { validateVersion } from "../core"
 import { CloseButton } from "./CloseButton"
 import { ErrorSection } from "./components/ErrorSection"
 import { LoadingSection } from "./components/LoadingSection"
@@ -11,11 +12,6 @@ import { useUISettings } from "./useUISettings"
 export interface SourceControlReleaseViewProps {
   gitService: GitService
   projectPath: string
-}
-
-function normalizeVersion(value: string): string | null {
-  const normalized = value.trim().replace(/^v/i, "")
-  return /^\d+\.\d+\.\d+$/.test(normalized) ? normalized : null
 }
 
 function displayRepository(url: string): string {
@@ -59,8 +55,8 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
   }, [gitService, projectPath])
 
   const publish = async () => {
-    const normalized = normalizeVersion(version)
-    if (!normalized) { setErrorMessage("版本号格式不正确\n示例：1.2.0"); return }
+    const normalized = validateVersion(version)
+    if (!normalized) { setErrorMessage("版本号格式不正确\n示例：1.0.0、1.2.3-beta.1"); return }
     if (!configured || publishing) return
     const tag = `v${normalized}`
     const confirmed = await Dialog.confirm({
@@ -83,7 +79,7 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
     }
   }
 
-  const normalizedVersion = normalizeVersion(version)
+  const normalizedVersion = validateVersion(version)
   const canPublish = !loading && configured && !publishing && normalizedVersion !== null
   return <NavigationStack>
     <List navigationTitle="发布 Release" toolbar={{ topBarLeading: <CloseButton /> }}>

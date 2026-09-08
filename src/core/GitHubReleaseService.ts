@@ -2,6 +2,7 @@ import { fetch } from "scripting"
 import { GitSafety } from "./GitSafety"
 import { GitService } from "./GitService"
 import { GitHubReleaseManifest, GitHubReleaseResult } from "./types"
+import { validateVersion } from "./version"
 
 export const GITHUB_RELEASE_TEMP_ROOT = `${FileManager.appGroupDocumentsDirectory}/source-control-release-temp`
 export const DEFAULT_MAX_RELEASE_FILE_COUNT = 1000
@@ -83,9 +84,7 @@ function positiveNumber(value: unknown): number | null {
 }
 
 function parseVersion(value: unknown): string | null {
-  const version = nonEmptyString(value)
-  if (!version || version.length > 100 || !/^[A-Za-z0-9][A-Za-z0-9._+-]*$/.test(version)) return null
-  return version
+  return validateVersion(value)
 }
 
 function parseProjectMetadata(value: unknown, fallbackName: string): ProjectMetadata | null {
@@ -343,7 +342,10 @@ export class GitHubReleaseService {
       const metadata = await this.readProjectMetadata()
       if (!metadata) throw new Error("Project version is missing.")
 
-      const requestedVersion = options?.version?.trim()
+      const requestedVersion = options?.version !== undefined ? validateVersion(options.version) : null
+      if (options?.version !== undefined && !requestedVersion) {
+        throw new Error("Project version is invalid.")
+      }
       const version = requestedVersion || metadata.version
       const releaseNotes = options?.releaseNotes?.trim() || `版本 ${version}`
 

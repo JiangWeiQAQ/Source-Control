@@ -1,5 +1,5 @@
 import { Button, List, Navigation, NavigationStack, Path, Section, Text, TextField, useEffect, useState } from "scripting"
-
+import { isValidVersion } from "../core"
 import { CloseButton } from "./CloseButton"
 
 interface ScriptConfig {
@@ -19,10 +19,6 @@ export interface SourceControlProjectConfigViewProps {
 
 function textValue(value: unknown): string {
   return typeof value === "string" ? value : ""
-}
-
-function versionIsValid(value: string): boolean {
-  return /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value.trim())
 }
 
 export function SourceControlProjectConfigView({ projectPath }: SourceControlProjectConfigViewProps) {
@@ -57,8 +53,8 @@ export function SourceControlProjectConfigView({ projectPath }: SourceControlPro
 
   const save = async () => {
     if (!config) return
-    if (!versionIsValid(version)) {
-      setErrorMessage("版本号必须符合 major.minor.patch，例如 1.0.1")
+    if (!isValidVersion(version)) {
+      setErrorMessage("版本号必须符合 SemVer 2.0 规范，例如 1.0.1、1.0.0-beta.1")
       return
     }
     setErrorMessage(null)

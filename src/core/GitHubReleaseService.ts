@@ -4,6 +4,8 @@ import { GitService } from "./GitService"
 import { GitHubReleaseManifest, GitHubReleaseResult } from "./types"
 
 export const GITHUB_RELEASE_TEMP_ROOT = `${FileManager.appGroupDocumentsDirectory}/source-control-release-temp`
+export const DEFAULT_MAX_RELEASE_FILE_COUNT = 1000
+export const DEFAULT_MAX_RELEASE_TOTAL_SIZE = 25 * 1024 * 1024 // 25MB
 
 export interface GitHubReleaseTransportResponse {
   status: number
@@ -135,6 +137,12 @@ function parseGithubHttpsRemote(url: string): GitHubRepositoryRef | null {
 function parentPath(path: string): string {
   const index = path.lastIndexOf("/")
   return index > 0 ? path.slice(0, index) : path
+}
+
+export function formatReleaseSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
 }
 
 function isReleaseAllowlisted(relativePath: string): boolean {
@@ -297,14 +305,19 @@ export function fileContainsToken(relativePath: string, bytes: Uint8Array, token
 
 export class GitHubReleaseService {
   private readonly transport: GitHubReleaseTransport
+  private readonly maxFileCount: number
+  private readonly maxTotalSize: number
 
   constructor(
     private readonly gitService: GitService,
     projectPath: string,
     transport?: GitHubReleaseTransport,
+    limits?: { maxFileCount?: number; maxTotalSize?: number },
   ) {
     this.projectPath = GitSafety.validateProjectPath(projectPath)
     this.transport = transport || createFetchTransport()
+    this.maxFileCount = limits?.maxFileCount ?? DEFAULT_MAX_RELEASE_FILE_COUNT
+    this.maxTotalSize = limits?.maxTotalSize ?? DEFAULT_MAX_RELEASE_TOTAL_SIZE
   }
 
   readonly projectPath: string
@@ -443,7 +456,36 @@ export class GitHubReleaseService {
       throw new Error("请先将当前版本同步到 GitHub，再发布 Release。")
     }
 
+    const { count, totalSize } = await this.collectReleaseCandidateStats(this.projectPath, "")
+    if (count > this.maxFileCount) {
+      throw new Error(`文件数量过多：待打包文件共 ${count} 个，超过限制（最多 ${this.maxFileCount} 个）。`)
+    }
+    if (totalSize > this.maxTotalSize) {
+      throw new Error(`项目体积过大：待打包文件总大小共 ${formatReleaseSize(totalSize)}，超过限制（最多 ${formatReleaseSize(this.maxTotalSize)}）。`)
+    }
+
     return { repository, token, branch, commitOid }
+  }
+
+  private async collectReleaseCandidateStats(sourceDirectory: string, relativeDirectory: string): Promise<{ count: number; totalSize: number }> {
+    let count = 0
+    let totalSize = 0
+    const entries = await FileManager.readDirectory(sourceDirectory)
+    for (const entry of entries) {
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry}` : entry
+      if (!isReleaseAllowlisted(relativePath) || shouldExclude(relativePath)) continue
+      const sourcePath = `${sourceDirectory}/${entry}`
+      if (await FileManager.isDirectory(sourcePath)) {
+        const subStats = await this.collectReleaseCandidateStats(sourcePath, relativePath)
+        count += subStats.count
+        totalSize += subStats.totalSize
+      } else {
+        count += 1
+        const fileStat = await FileManager.stat(sourcePath)
+        totalSize += fileStat?.size ?? 0
+      }
+    }
+    return { count, totalSize }
   }
 
   private async createZip(runDirectory: string, assetName: string, manifest: GitHubReleaseManifest, token: string): Promise<string> {

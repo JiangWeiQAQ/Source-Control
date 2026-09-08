@@ -379,7 +379,59 @@ async function run(): Promise<void> {
     }
     assert(leakError === "Project files contain the GitHub access token and cannot be packaged.", "leaked token in ts file was not rejected")
 
-    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization"] })
+    // 验证预检：文件数量超限直接中止 Release
+    const excessFilesProject = await makeProject(`${root}/excess-files-project`)
+    let excessFilesError = ""
+    try {
+      // 传入测试 limit: maxFileCount = 3 (makeProject 会生成 index.tsx, script.json, README.md, src/index.ts 共 4 个有效 candidate 文件)
+      await new GitHubReleaseService(
+        fakeGitService({ projectPath: excessFilesProject, commitOid }),
+        excessFilesProject,
+        new MockReleaseTransport("success", assetName),
+        { maxFileCount: 3 },
+      ).publishCurrentProject()
+    } catch (err) {
+      excessFilesError = err instanceof Error ? err.message : String(err)
+    }
+    assert(excessFilesError.includes("文件数量过多") && excessFilesError.includes("超过限制"), "excess files limit did not abort release")
+
+    // 验证预检：项目体积超限直接中止 Release
+    const excessSizeProject = await makeProject(`${root}/excess-size-project`)
+    let excessSizeError = ""
+    try {
+      // 传入测试 limit: maxTotalSize = 100 字节，实际项目已超过 100 字节
+      await new GitHubReleaseService(
+        fakeGitService({ projectPath: excessSizeProject, commitOid }),
+        excessSizeProject,
+        new MockReleaseTransport("success", assetName),
+        { maxTotalSize: 100 },
+      ).publishCurrentProject()
+    } catch (err) {
+      excessSizeError = err instanceof Error ? err.message : String(err)
+    }
+    assert(excessSizeError.includes("项目体积过大") && excessSizeError.includes("超过限制"), "excess total size limit did not abort release")
+
+    // 验证排除文件不计入文件数和大小统计
+    const excludedPreflightProject = await makeProject(`${root}/excluded-preflight-project`)
+    // 加入大量或大体积的应被排除文件，例如 .git 文件夹、verify 测试文件、.env、node_modules
+    await FileManager.createDirectory(`${excludedPreflightProject}/.git/objects`, true)
+    await FileManager.writeAsString(`${excludedPreflightProject}/.git/objects/huge.pack`, "x".repeat(2000), "utf8")
+    await FileManager.createDirectory(`${excludedPreflightProject}/node_modules/pkg`, true)
+    await FileManager.writeAsString(`${excludedPreflightProject}/node_modules/pkg/index.js`, "x".repeat(2000), "utf8")
+    await FileManager.createDirectory(`${excludedPreflightProject}/source-control-metadata`, true)
+    await FileManager.writeAsString(`${excludedPreflightProject}/source-control-metadata/data.json`, "x".repeat(2000), "utf8")
+    await FileManager.writeAsString(`${excludedPreflightProject}/verify-something.ts`, "x".repeat(2000), "utf8")
+    // 限制 5 个文件、2000 字节。有效文件 5 个（index.tsx, script.json, README.md, src/runtime.tsx, assets/icon.txt，合计约 150 字节）
+    // 如果排除了上述文件，则不会触发数量和大小超限报错，能正常成功发布
+    const excludedPreflightResult = await new GitHubReleaseService(
+      fakeGitService({ projectPath: excludedPreflightProject, commitOid }),
+      excludedPreflightProject,
+      new MockReleaseTransport("success", assetName),
+      { maxFileCount: 5, maxTotalSize: 2000 },
+    ).publishCurrentProject()
+    assert(excludedPreflightResult.assetUploaded, "excluded files should not count towards preflight limits")
+
+    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization", "preflight-limits"] })
   } finally {
     try {
       if (await FileManager.exists(root)) await FileManager.remove(root)

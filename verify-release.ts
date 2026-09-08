@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse } from "./src/core/GitHubReleaseService"
+import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, fileContainsToken, isTextScanFile } from "./src/core/GitHubReleaseService"
 import { GitAheadBehind, GitCommitInfo, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus } from "./src/core/types"
 import { GitService } from "./src/core/GitService"
 
@@ -270,7 +270,116 @@ async function run(): Promise<void> {
     assert(zipFailure.length > 0 && zipFailureTransport.requests.length === 0, "ZIP failure called GitHub")
     await assertTempClean()
 
-    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe"] })
+    // 针对 Token 扫描优化的最小验证
+    const testToken = "ghp_secret_token_123456"
+
+    // 1. 普通 ts / json 文件能发现 Token
+    const textFiles = [
+      { path: "src/sample.ts", content: "export const t = 'ghp_secret_token_123456'" },
+      { path: "config.json", content: '{"token": "ghp_secret_token_123456"}' },
+    ]
+    for (const tf of textFiles) {
+      const bytes = new TextEncoder().encode(tf.content)
+      assert(fileContainsToken(tf.path, bytes, testToken), `Failed to detect token in ${tf.path}`)
+      const safeBytes = new TextEncoder().encode("export const normal = true")
+      assert(!fileContainsToken(tf.path, safeBytes, testToken), `False positive token detected in safe ${tf.path}`)
+    }
+
+    // 2. PNG 等二进制文件不会执行 TextDecoder，不报 Token（即使二进制中巧合包含类似模式或文本）
+    // 验证 isTextScanFile 判断规则
+    assert(!isTextScanFile("assets/icon.png"), "png should not be text scan file")
+    assert(!isTextScanFile("images/photo.jpg"), "jpg should not be text scan file")
+    assert(!isTextScanFile("music/bgm.mp3"), "mp3 should not be text scan file")
+    assert(!isTextScanFile("fonts/font.ttf"), "ttf should not be text scan file")
+    assert(!isTextScanFile("binary.bin"), "bin should not be text scan file")
+
+    // 验证文本扩展名均被识别
+    const requiredExtensions = [".ts", ".tsx", ".js", ".jsx", ".json", ".md", ".txt", ".html", ".css", ".yml", ".yaml", ".xml", ".env"]
+    for (const ext of requiredExtensions) {
+      assert(isTextScanFile(`dir/file${ext}`), `extension ${ext} should be recognized as text scan file`)
+    }
+    assert(isTextScanFile(".env"), ".env should be text scan file")
+    assert(isTextScanFile(".env.local"), ".env.local should be text scan file")
+
+    // 验证二进制文件即使内容含有 token 字节，也不做内容解码扫描
+    let textDecoderCalls = 0
+    const globalObj = globalThis as unknown as Record<string, unknown>
+    const originalTextDecoder = globalObj.TextDecoder as new (...args: unknown[]) => { decode: (input?: unknown, options?: unknown) => string }
+    class TrackedTextDecoder {
+      private inner: { decode: (input?: unknown, options?: unknown) => string }
+      constructor(...args: unknown[]) {
+        this.inner = new originalTextDecoder(...args)
+      }
+      decode(input?: unknown, options?: unknown): string {
+        textDecoderCalls++
+        return this.inner.decode(input, options)
+      }
+    }
+    globalObj.TextDecoder = TrackedTextDecoder
+
+    try {
+      textDecoderCalls = 0
+      const fakePngBytes = new TextEncoder().encode("fake png containing ghp_secret_token_123456")
+      const detectedInPng = fileContainsToken("assets/logo.png", fakePngBytes, testToken)
+      assert(!detectedInPng, "binary file should not match token content")
+      assert(textDecoderCalls === 0, `TextDecoder was called ${textDecoderCalls} times on binary file`)
+
+      // 3. 大于 1MB 文本文件不会产生 TextDecoder 解码
+      textDecoderCalls = 0
+      const largeSize = 1024 * 1024 + 100 // 1MB + 100 字节
+      const largeBytes = new Uint8Array(largeSize)
+      largeBytes.fill(32) // 空格
+      // 在末尾放入 token
+      const tokenBytes = new TextEncoder().encode(testToken)
+      largeBytes.set(tokenBytes, largeSize - 50)
+
+      const detectedInLarge = fileContainsToken("large-file.ts", largeBytes, testToken)
+      assert(detectedInLarge, "large text file should detect token via byte scan")
+      assert(textDecoderCalls === 0, `TextDecoder was called ${textDecoderCalls} times on >1MB file`)
+
+      // 大文件无 token
+      const largeSafeBytes = new Uint8Array(largeSize)
+      largeSafeBytes.fill(65) // 'A'
+      const detectedInLargeSafe = fileContainsToken("large-file.ts", largeSafeBytes, testToken)
+      assert(!detectedInLargeSafe, "large safe text file false positive")
+      assert(textDecoderCalls === 0, `TextDecoder was called ${textDecoderCalls} times on large safe file`)
+
+      // 小于 1MB 的文本文件会使用正常的 decode
+      textDecoderCalls = 0
+      const smallTextBytes = new TextEncoder().encode("const x = 'ghp_secret_token_123456'")
+      assert(fileContainsToken("index.ts", smallTextBytes, testToken), "small text file should detect token")
+      assert(textDecoderCalls > 0, "TextDecoder should be used for <= 1MB text file")
+    } finally {
+      globalObj.TextDecoder = originalTextDecoder
+    }
+
+    // 4. relativePath 中包含 Token 的检查保留（即使是二进制扩展名）
+    assert(fileContainsToken(`folder/${testToken}/image.png`, new Uint8Array([1, 2, 3]), testToken), "relativePath containing token must be rejected even for binary")
+
+    // 5. 验证包含真实二进制文件的项目能正常打包（PNG 文件在项目中，能成功复制且 Release 成功）
+    const binaryProjectPath = await makeProject(`${root}/binary-project`)
+    // 写入一个 PNG 文件到 assets
+    const dummyPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])
+    await FileManager.writeAsBytes(`${binaryProjectPath}/assets/image.png`, dummyPng)
+    const binaryTransport = new MockReleaseTransport("success", assetName)
+    const binaryResult = await new GitHubReleaseService(fakeGitService({ projectPath: binaryProjectPath, commitOid }), binaryProjectPath, binaryTransport).publishCurrentProject()
+    assert(binaryResult.assetUploaded, "binary project release should upload asset successfully")
+    const uploadBinary = binaryTransport.requests[2]
+    const binaryArchive = await readArchivePaths(new Uint8Array(uploadBinary.body as ArrayBuffer), `${root}/archive-binary-check`)
+    assert(binaryArchive.paths.includes("Source Control/assets/image.png"), "image.png is included in packaged zip")
+
+    // 验证项目中如果普通 ts 文件含有 token，打包会被拦截
+    const tokenProjectPath = await makeProject(`${root}/token-leak-project`)
+    await FileManager.writeAsString(`${tokenProjectPath}/src/leak.ts`, `export const secret = "${testToken}"\n`, "utf8")
+    let leakError = ""
+    try {
+      await new GitHubReleaseService(fakeGitService({ projectPath: tokenProjectPath, commitOid: "b".repeat(40), credential: { username: "x-access-token", password: testToken } }), tokenProjectPath, new MockReleaseTransport("success", assetName)).publishCurrentProject()
+    } catch (err) {
+      leakError = err instanceof Error ? err.message : String(err)
+    }
+    assert(leakError === "Project files contain the GitHub access token and cannot be packaged.", "leaked token in ts file was not rejected")
+
+    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization"] })
   } finally {
     try {
       if (await FileManager.exists(root)) await FileManager.remove(root)

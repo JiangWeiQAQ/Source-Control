@@ -213,6 +213,88 @@ function safeApiError(status: number): Error {
   return new Error(`GitHub Release API request failed with status ${status}.`)
 }
 
+const MAX_DECODE_SCAN_SIZE = 1024 * 1024
+
+const TEXT_FILE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".json",
+  ".md",
+  ".txt",
+  ".html",
+  ".css",
+  ".yml",
+  ".yaml",
+  ".xml",
+  ".env",
+])
+
+export function isTextScanFile(relativePath: string): boolean {
+  const normalized = relativePath.toLowerCase()
+  const lastSlash = normalized.lastIndexOf("/")
+  const filename = lastSlash >= 0 ? normalized.slice(lastSlash + 1) : normalized
+
+  if (filename === ".env" || filename.startsWith(".env.")) {
+    return true
+  }
+
+  const dotIndex = filename.lastIndexOf(".")
+  if (dotIndex <= 0) {
+    return false
+  }
+
+  const extension = filename.slice(dotIndex)
+  return TEXT_FILE_EXTENSIONS.has(extension)
+}
+
+export function bytesContainToken(bytes: Uint8Array, tokenBytes: Uint8Array): boolean {
+  const tokenLen = tokenBytes.length
+  if (tokenLen === 0) return false
+  const byteLen = bytes.length
+  if (byteLen < tokenLen) return false
+
+  const firstByte = tokenBytes[0]
+  const limit = byteLen - tokenLen
+
+  for (let i = 0; i <= limit; i++) {
+    if (bytes[i] === firstByte) {
+      let match = true
+      for (let j = 1; j < tokenLen; j++) {
+        if (bytes[i + j] !== tokenBytes[j]) {
+          match = false
+          break
+        }
+      }
+      if (match) return true
+    }
+  }
+
+  return false
+}
+
+export function fileContainsToken(relativePath: string, bytes: Uint8Array, token: string): boolean {
+  if (relativePath.includes(token)) {
+    return true
+  }
+
+  if (!isTextScanFile(relativePath)) {
+    return false
+  }
+
+  const tokenBytes = new TextEncoder().encode(token)
+  if (tokenBytes.length === 0) {
+    return false
+  }
+
+  if (bytes.length > MAX_DECODE_SCAN_SIZE) {
+    return bytesContainToken(bytes, tokenBytes)
+  }
+
+  return new TextDecoder().decode(bytes).includes(token)
+}
+
 export class GitHubReleaseService {
   private readonly transport: GitHubReleaseTransport
 
@@ -387,7 +469,7 @@ export class GitHubReleaseService {
         await this.copyReleaseFiles(sourcePath, targetDirectory, relativePath, token)
       } else {
         const bytes = await FileManager.readAsBytes(sourcePath)
-        if (relativePath.includes(token) || new TextDecoder().decode(bytes).includes(token)) throw new Error("Project files contain the GitHub access token and cannot be packaged.")
+        if (fileContainsToken(relativePath, bytes, token)) throw new Error("Project files contain the GitHub access token and cannot be packaged.")
         await FileManager.createDirectory(parentPath(targetPath), true)
         await FileManager.copyFile(sourcePath, targetPath)
       }

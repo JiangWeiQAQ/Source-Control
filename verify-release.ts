@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, fileContainsToken, isTextScanFile } from "./src/core/GitHubReleaseService"
+import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, RELEASE_TEMP_STALE_MS, fileContainsToken, isTextScanFile } from "./src/core/GitHubReleaseService"
 import { GitAheadBehind, GitCommitInfo, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus } from "./src/core/types"
 import { GitService } from "./src/core/GitService"
 
@@ -165,6 +165,9 @@ async function assertTempClean(): Promise<void> {
 }
 
 async function run(): Promise<void> {
+  if (await FileManager.exists(GITHUB_RELEASE_TEMP_ROOT)) {
+    await FileManager.remove(GITHUB_RELEASE_TEMP_ROOT)
+  }
   const root = `${FileManager.appGroupDocumentsDirectory}/Source Control Release Test-${Date.now()}`
   const commitOid = "a".repeat(40)
   const token = ["mock", "release", "token"].join("-")
@@ -431,7 +434,93 @@ async function run(): Promise<void> {
     ).publishCurrentProject()
     assert(excludedPreflightResult.assetUploaded, "excluded files should not count towards preflight limits")
 
-    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization", "preflight-limits"] })
+    // 验证 1：互斥锁并发调用测试
+    const mutexProject = await makeProject(`${root}/mutex-project`)
+    let resumeRelease: (() => void) | null = null
+    const pauseBeforeUpload = new Promise<void>((resolve) => {
+      resumeRelease = resolve
+    })
+    const delayedTransport = new MockReleaseTransport("success", assetName)
+    const originalRequest = delayedTransport.request.bind(delayedTransport)
+    delayedTransport.request = async (options) => {
+      if (options.url.includes("/assets?name=")) {
+        await pauseBeforeUpload
+      }
+      return originalRequest(options)
+    }
+
+    const mutexService = new GitHubReleaseService(
+      fakeGitService({ projectPath: mutexProject, commitOid }),
+      mutexProject,
+      delayedTransport,
+    )
+    assert((mutexService.isPublishing as boolean) === false, "initial isPublishing should be false")
+    const firstCallPromise = mutexService.publishCurrentProject()
+    assert((mutexService.isPublishing as boolean) === true, "isPublishing should be true during release")
+
+    let secondCallRejected = false
+    try {
+      await mutexService.publishCurrentProject()
+    } catch (err) {
+      secondCallRejected = true
+      const msg = err instanceof Error ? err.message : String(err)
+      assert(msg.includes("Release 发布正在进行中"), "should reject concurrent release with correct message")
+    }
+    assert(secondCallRejected, "second call should be rejected while publishing")
+
+    if (resumeRelease) (resumeRelease as () => void)()
+    await firstCallPromise
+    assert(mutexService.isPublishing === false, "isPublishing should be reset to false after success")
+
+    // 验证 2：第一次发布失败后互斥锁能够正常释放
+    const failTransport = new MockReleaseTransport("upload-failure", assetName)
+    const failService = new GitHubReleaseService(fakeGitService({ projectPath: mutexProject, commitOid }), mutexProject, failTransport)
+    let failureFailed = false
+    try {
+      await failService.publishCurrentProject()
+    } catch {
+      failureFailed = true
+    }
+    assert(failureFailed, "upload failure should throw")
+    assert((failService.isPublishing as boolean) === false, "isPublishing should be reset to false after error")
+
+    // 验证 3：清理遗留旧临时目录（>24小时），保留新临时目录（<24小时），并在发布后清理自身临时目录
+    await FileManager.createDirectory(GITHUB_RELEASE_TEMP_ROOT, true)
+    const oldTempName = `${Date.now() - 30 * 3600 * 1000}-oldrun1`
+    const oldTempPath = `${GITHUB_RELEASE_TEMP_ROOT}/${oldTempName}`
+    await FileManager.createDirectory(oldTempPath, true)
+    await FileManager.writeAsString(`${oldTempPath}/leftover.txt`, "old temp", "utf8")
+
+    const newTempName = `${Date.now() - 10 * 60 * 1000}-newrun1`
+    const newTempPath = `${GITHUB_RELEASE_TEMP_ROOT}/${newTempName}`
+    await FileManager.createDirectory(newTempPath, true)
+    await FileManager.writeAsString(`${newTempPath}/keep.txt`, "recent temp", "utf8")
+
+    const unrelatedName = `custom-cache-dir`
+    const unrelatedPath = `${GITHUB_RELEASE_TEMP_ROOT}/${unrelatedName}`
+    await FileManager.createDirectory(unrelatedPath, true)
+    await FileManager.writeAsString(`${unrelatedPath}/keep.txt`, "unrelated", "utf8")
+
+    const cleanupTestService = new GitHubReleaseService(
+      fakeGitService({ projectPath: mutexProject, commitOid }),
+      mutexProject,
+      new MockReleaseTransport("success", assetName),
+    )
+    const cleanupResult = await cleanupTestService.publishCurrentProject()
+    assert(cleanupResult.assetUploaded, "release with stale cleanup should succeed")
+
+    const oldExists = await FileManager.exists(oldTempPath)
+    const newExists = await FileManager.exists(newTempPath)
+    const unrelatedExists = await FileManager.exists(unrelatedPath)
+    assert(!oldExists, "stale temp directory (>24h) should be cleaned")
+    assert(newExists, "recent temp directory (<24h) should be preserved")
+    assert(unrelatedExists, "unrelated directory should not be touched")
+
+    // 清理测试目录
+    if (newExists) await FileManager.remove(newTempPath)
+    if (unrelatedExists) await FileManager.remove(unrelatedPath)
+
+    Script.exit({ ok: true, scenarios: ["zip-structure", "git-excluded", "metadata-excluded", "verify-filtered", "manifest", "missing-version", "dirty", "local-ahead", "missing-token", "non-github-remote", "existing-release", "upload-failure", "temp-cleanup", "token-safe", "token-scan-optimization", "preflight-limits", "release-mutex-and-cleanup"] })
   } finally {
     try {
       if (await FileManager.exists(root)) await FileManager.remove(root)

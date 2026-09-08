@@ -6,6 +6,7 @@ import { GitHubReleaseManifest, GitHubReleaseResult } from "./types"
 export const GITHUB_RELEASE_TEMP_ROOT = `${FileManager.appGroupDocumentsDirectory}/source-control-release-temp`
 export const DEFAULT_MAX_RELEASE_FILE_COUNT = 1000
 export const DEFAULT_MAX_RELEASE_TOTAL_SIZE = 25 * 1024 * 1024 // 25MB
+export const RELEASE_TEMP_STALE_MS = 24 * 60 * 60 * 1000 // 24小时
 
 export interface GitHubReleaseTransportResponse {
   status: number
@@ -307,6 +308,7 @@ export class GitHubReleaseService {
   private readonly transport: GitHubReleaseTransport
   private readonly maxFileCount: number
   private readonly maxTotalSize: number
+  isPublishing: boolean = false
 
   constructor(
     private readonly gitService: GitService,
@@ -329,29 +331,35 @@ export class GitHubReleaseService {
   }
 
   async publishCurrentProject(options?: { version?: string; releaseNotes?: string }): Promise<GitHubReleaseResult> {
-    await this.gitService.openRepository(this.projectPath)
-    const preflight = await this.preflight()
-    const metadata = await this.readProjectMetadata()
-    if (!metadata) throw new Error("Project version is missing.")
+    if (this.isPublishing) throw new Error("Release 发布正在进行中，请勿重复操作。")
+    this.isPublishing = true
 
-    const requestedVersion = options?.version?.trim()
-    const version = requestedVersion || metadata.version
-    const releaseNotes = options?.releaseNotes?.trim() || `版本 ${version}`
-
-    const tagName = `v${version}`
-    const assetName = `${slugify(metadata.name)}-${version}.zip`
-    const releasedAt = Math.floor(Date.now() / 1000)
-    const manifest: GitHubReleaseManifest = {
-      name: metadata.name,
-      version,
-      commitOid: preflight.commitOid,
-      releasedAt,
-      minimumScriptingVersion: null,
-    }
-
-    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-    const runDirectory = `${GITHUB_RELEASE_TEMP_ROOT}/${runId}`
+    let runDirectory: string | null = null
     try {
+      await this.cleanStaleTempDirectories()
+
+      await this.gitService.openRepository(this.projectPath)
+      const preflight = await this.preflight()
+      const metadata = await this.readProjectMetadata()
+      if (!metadata) throw new Error("Project version is missing.")
+
+      const requestedVersion = options?.version?.trim()
+      const version = requestedVersion || metadata.version
+      const releaseNotes = options?.releaseNotes?.trim() || `版本 ${version}`
+
+      const tagName = `v${version}`
+      const assetName = `${slugify(metadata.name)}-${version}.zip`
+      const releasedAt = Math.floor(Date.now() / 1000)
+      const manifest: GitHubReleaseManifest = {
+        name: metadata.name,
+        version,
+        commitOid: preflight.commitOid,
+        releasedAt,
+        minimumScriptingVersion: null,
+      }
+
+      const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      runDirectory = `${GITHUB_RELEASE_TEMP_ROOT}/${runId}`
       const zipPath = await this.createZip(runDirectory, assetName, manifest, preflight.token)
       const zipBytes = await FileManager.readAsBytes(zipPath)
       const release = await this.findOrCreateRelease(preflight.repository, preflight.token, tagName, `${metadata.name} ${version}`, preflight.commitOid, releaseNotes)
@@ -394,11 +402,39 @@ export class GitHubReleaseService {
       }
     } finally {
       try {
-        if (await FileManager.exists(runDirectory)) await FileManager.remove(runDirectory)
+        if (runDirectory && (await FileManager.exists(runDirectory))) await FileManager.remove(runDirectory)
         if (await FileManager.exists(GITHUB_RELEASE_TEMP_ROOT) && (await FileManager.readDirectory(GITHUB_RELEASE_TEMP_ROOT)).length === 0) await FileManager.remove(GITHUB_RELEASE_TEMP_ROOT)
       } catch {
         // 临时目录清理失败不能泄露凭据，也不覆盖发布结果。
       }
+      this.isPublishing = false
+    }
+  }
+
+  private async cleanStaleTempDirectories(): Promise<void> {
+    try {
+      if (!(await FileManager.exists(GITHUB_RELEASE_TEMP_ROOT))) return
+      const entries = await FileManager.readDirectory(GITHUB_RELEASE_TEMP_ROOT)
+      const now = Date.now()
+      for (const entry of entries) {
+        const match = /^(\d{10,13})-[a-z0-9]+$/i.exec(entry)
+        if (!match) continue
+        const runTimestamp = Number(match[1])
+        const entryPath = `${GITHUB_RELEASE_TEMP_ROOT}/${entry}`
+        const stat = await FileManager.stat(entryPath)
+        const isDir = stat?.type === "directory" || stat?.type === "NSFileTypeDirectory" || (await FileManager.isDirectory(entryPath))
+        if (!isDir) continue
+        const statTime = stat.modificationDate > 1e11 ? stat.modificationDate : stat.modificationDate * 1000
+        const effectiveTime = runTimestamp > 1e11 ? runTimestamp : statTime
+        if (now - effectiveTime > RELEASE_TEMP_STALE_MS) {
+          await FileManager.remove(entryPath)
+        }
+      }
+      if ((await FileManager.readDirectory(GITHUB_RELEASE_TEMP_ROOT)).length === 0) {
+        await FileManager.remove(GITHUB_RELEASE_TEMP_ROOT)
+      }
+    } catch {
+      // 忽略清理过程中的非致命错误，不阻塞正常发布流程
     }
   }
 

@@ -1,5 +1,5 @@
 import { Button, List, Navigation, NavigationStack, Path, Section, Text, TextField, useEffect, useState } from "scripting"
-import { isValidVersion } from "../core"
+import { isValidVersion, JsonStore, ProjectRegistry } from "../core"
 import { CloseButton } from "./CloseButton"
 
 interface ScriptConfig {
@@ -15,13 +15,14 @@ interface ScriptConfig {
 
 export interface SourceControlProjectConfigViewProps {
   projectPath: string
+  onSaved?: (config: ScriptConfig) => Promise<void> | void
 }
 
 function textValue(value: unknown): string {
   return typeof value === "string" ? value : ""
 }
 
-export function SourceControlProjectConfigView({ projectPath }: SourceControlProjectConfigViewProps) {
+export function SourceControlProjectConfigView({ projectPath, onSaved }: SourceControlProjectConfigViewProps) {
   const dismiss = Navigation.useDismiss()
   const [config, setConfig] = useState<ScriptConfig | null>(null)
   const [version, setVersion] = useState("")
@@ -53,33 +54,54 @@ export function SourceControlProjectConfigView({ projectPath }: SourceControlPro
 
   const save = async () => {
     if (!config) return
-    if (!isValidVersion(version)) {
+    const trimmedVersion = version.trim()
+    if (!isValidVersion(trimmedVersion)) {
       setErrorMessage("版本号必须符合 SemVer 2.0 规范，例如 1.0.1、1.0.0-beta.1")
       return
     }
     setErrorMessage(null)
     setSaved(false)
-    const originalText = await FileManager.readAsString(scriptJsonPath, "utf8")
-    const updated: ScriptConfig = { ...config, version: version.trim(), description }
-    if ("author" in config && config.author && typeof config.author === "object") {
-      updated.author = { ...(config.author as Record<string, unknown>), name: authorName }
-    }
-    if ("icon" in config) updated.icon = icon
-    if ("color" in config) updated.color = color
-    const updatedText = `${JSON.stringify(updated, null, 2)}\n`
-    JSON.parse(updatedText)
+
     try {
-      await FileManager.writeAsString(scriptJsonPath, updatedText, "utf8")
-      const savedText = await FileManager.readAsString(scriptJsonPath, "utf8")
-      JSON.parse(savedText)
+      // 1. 保留原始 JSON 对象未知字段，同时合并最新磁盘内容以防外部并发修改
+      let baseConfig: ScriptConfig = { ...config }
+      if (await FileManager.exists(scriptJsonPath)) {
+        try {
+          const currentParsed = JSON.parse(await FileManager.readAsString(scriptJsonPath, "utf8")) as ScriptConfig
+          if (currentParsed && typeof currentParsed === "object" && !Array.isArray(currentParsed)) {
+            baseConfig = { ...baseConfig, ...currentParsed }
+          }
+        } catch {
+          // 降级使用当前内存中的 config
+        }
+      }
+
+      // 2. 生成更新后的 JSON 对象
+      const updated: ScriptConfig = { ...baseConfig, version: trimmedVersion, description }
+      if ("author" in config && config.author && typeof config.author === "object") {
+        updated.author = { ...(config.author as Record<string, unknown>), name: authorName }
+      }
+      if ("icon" in config) updated.icon = icon
+      if ("color" in config) updated.color = color
+
+      // 3. 通过 JsonStore.writeAtomic 进行原子写入（写入临时文件 -> JSON.parse 校验 -> 备份 -> rename 原子替换 -> 异常自动恢复原文件）
+      await JsonStore.writeAtomic(scriptJsonPath, updated)
       setConfig(updated)
       setSaved(true)
-    } catch (error) {
+
+      // 4. 刷新当前项目 metadata 状态（同步 projects.json 中的项目信息）
       try {
-        await FileManager.writeAsString(scriptJsonPath, originalText, "utf8")
-      } catch (restoreError) {
-        console.error("[ProjectConfig] restore original script.json failed", restoreError)
+        const registry = new ProjectRegistry()
+        await registry.getOrCreateProject(projectPath)
+      } catch (metaErr) {
+        console.error("[ProjectConfig] refresh project metadata failed", metaErr)
       }
+
+      // 5. 触发外部回调以同步父级视图（如 SettingsView 中的 releaseVersion）
+      if (onSaved) {
+        await onSaved(updated)
+      }
+    } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     }
   }

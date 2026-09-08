@@ -1,4 +1,4 @@
-import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
+import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Spacer, Text, useCallback, useEffect, useState, VStack } from "scripting"
 import { GitHubReleaseService } from "../core/GitHubReleaseService"
 import { GitHubReleaseResult } from "../core/types"
 import { GitService } from "../core/GitService"
@@ -74,9 +74,34 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const busy = operation !== null
   const statusError = errorMessage ?? remoteStatusError
 
+  const loadVersion = useCallback(async () => {
+    if (!gitService || !projectPath) {
+      setReleaseVersion(null)
+      setReleaseVersionError(null)
+      setReleaseResult(null)
+      return
+    }
+    try {
+      const version = await new GitHubReleaseService(gitService, projectPath).getProjectVersion()
+      setReleaseVersion(version)
+      setReleaseVersionError(null)
+    } catch (error) {
+      setReleaseVersion(null)
+      setReleaseVersionError(error instanceof Error ? error.message : String(error))
+    }
+  }, [gitService, projectPath])
+
   const openProjectConfig = async () => {
     if (!projectPath || busy) return
-    await Navigation.present(<SourceControlProjectConfigView projectPath={projectPath} />)
+    await Navigation.present(
+      <SourceControlProjectConfigView
+        projectPath={projectPath}
+        onSaved={async () => {
+          await loadVersion()
+        }}
+      />
+    )
+    await loadVersion()
   }
 
   const notifyRemoteChanged = async () => {
@@ -377,24 +402,8 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   }
 
   useEffect(() => {
-    if (!gitService || !projectPath) {
-      setReleaseVersion(null)
-      setReleaseVersionError(null)
-      setReleaseResult(null)
-      return
-    }
-    const loadVersion = async () => {
-      try {
-        const version = await new GitHubReleaseService(gitService, projectPath).getProjectVersion()
-        setReleaseVersion(version)
-        setReleaseVersionError(null)
-      } catch (error) {
-        setReleaseVersion(null)
-        setReleaseVersionError(error instanceof Error ? error.message : String(error))
-      }
-    }
     loadVersion().catch(console.error)
-  }, [gitService, projectPath])
+  }, [loadVersion])
 
   const openReleaseSettings = async () => {
     if (!gitService || !projectPath || busy) return

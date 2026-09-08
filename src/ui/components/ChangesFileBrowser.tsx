@@ -54,7 +54,7 @@ export function ChangesFileBrowser({ groups, selectedFolder, onSelect, service, 
       {(selected?.files || []).map((change) => {
         const filename = fileParts(change.filepath).filename
         if (filename === "script.json" && projectPath) {
-          return <ChangeFileRow key={change.filepath} change={change} subtitle="项目配置" showsChevron onPress={() => { Navigation.present(<SourceControlProjectConfigView projectPath={projectPath} />).catch(console.error) }} disabled={disabled} />
+          return <ChangeFileRow key={change.filepath} change={change} subtitle="项目配置" showsChevron onPress={() => { Navigation.present(<SourceControlProjectConfigView projectPath={projectPath} onSaved={() => { onChanged?.() }} />).catch(console.error) }} disabled={disabled} />
         }
         return <ChangeFileRow key={change.filepath} change={change} subtitle={`${change.status === "untracked" ? "?" : change.status === "added" ? "A" : change.status === "deleted" ? "D" : "M"} · ${formatChangeType(change.status, language)}`} destination={<SourceControlDiffView gitService={service} change={change} comparison={filter} onChanged={onChanged} />} disabled={disabled} />
       })}

@@ -164,7 +164,7 @@ export class GitRepository {
     return remote
   }
 
-  /** Fetch HTTPS Remote，仅更新 objects 与 remote-tracking refs。 */
+  /** Fetch HTTPS Remote，仅更新 objects 与 remote-tracking refs，并清理已删除分支。 */
   async fetchRemote(name = "origin"): Promise<{ remote: string; branch: string | null; fetched: boolean }> {
     const remoteName = validateRemoteName(name)
     const remote = (await this.listRemotes()).find((item) => item.name === remoteName)
@@ -174,14 +174,20 @@ export class GitRepository {
     }
     try {
       const credential = await this.getRemoteCredential(remoteName)
-      await this.git.fetch({
+      const fetchResult = await this.git.fetch({
         fs: this.fs,
         dir: this.projectPath,
         gitdir: this.gitdir,
         remote: remoteName,
         http: createFetchHttpClient(),
+        prune: true,
         onAuth: credential ? () => credential : undefined,
       })
+      // vendored isomorphic-git 在服务器完全没有 refs 时会在 updateRemoteRefs 前返回；
+      // 此时原生 prune 没有机会执行，补一次严格限定在当前 remote namespace 的清理。
+      if (fetchResult.fetchHead === null) {
+        await this.pruneEmptyRemoteTrackingRefs(remoteName, remote.url, credential)
+      }
       const branches = await this.listRemoteBranches(remoteName)
       return { remote: remoteName, branch: branches[0]?.name ?? null, fetched: true }
     } catch (error) {
@@ -190,6 +196,27 @@ export class GitRepository {
       const lower = message.toLowerCase()
       const kind = /auth|401|403|unauthor/i.test(lower) ? "认证失败" : /network|fetch|enotfound|timed out|offline|internet|无法连接服务器|http error/i.test(lower) ? "网络失败" : "Fetch 失败"
       throw new Error(`${kind}: ${message}`)
+    }
+  }
+
+  private async pruneEmptyRemoteTrackingRefs(remoteName: string, remoteUrl: string, credential: GitRemoteCredential | null): Promise<void> {
+    const serverPrefix = "refs/heads/"
+    const serverBranches = new Set(
+      (await this.git.listServerRefs({
+        http: createFetchHttpClient(),
+        url: remoteUrl,
+        prefix: serverPrefix,
+        onAuth: credential ? () => credential : undefined,
+      }))
+        .filter((item) => item.ref.startsWith(serverPrefix) && item.ref.length > serverPrefix.length)
+        .map((item) => item.ref.slice(serverPrefix.length)),
+    )
+    const trackingPrefix = `refs/remotes/${remoteName}/`
+    const localBranches = await this.listRemoteBranches(remoteName)
+    for (const branch of localBranches) {
+      if (serverBranches.has(branch.name)) continue
+      if (!branch.ref.startsWith(trackingPrefix)) continue
+      await this.git.deleteRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: branch.ref })
     }
   }
 

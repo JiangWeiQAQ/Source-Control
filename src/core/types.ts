@@ -322,12 +322,12 @@ export interface IsomorphicGitAdapter {
   checkout(options: { fs: unknown; dir: string; gitdir: string; filepaths?: string[]; ref?: string; force?: boolean }): Promise<void>
   currentBranch(options: { fs: unknown; dir: string; gitdir: string; fullname?: boolean }): Promise<string | undefined>
   listRefs(options: { fs: unknown; dir: string; gitdir: string; filepath: string }): Promise<string[]>
-  listServerRefs(options: { http: IsomorphicGitHttpClient; url: string; prefix?: string }): Promise<Array<{ ref: string; oid: string }>>
+  listServerRefs(options: { http: IsomorphicGitHttpClient; url: string; prefix?: string; onAuth?: () => { username: string; password: string } | void }): Promise<Array<{ ref: string; oid: string }>>
   resolveRef(options: { fs: unknown; dir: string; gitdir: string; ref: string }): Promise<string>
   readBlob(options: { fs: unknown; dir: string; gitdir: string; oid: string; filepath: string }): Promise<{ oid: string; blob: Uint8Array }>
   readObject(options: { fs: unknown; dir: string; gitdir: string; oid: string; format?: "parsed" | "content" }): Promise<{ oid: string; type: string; object: Uint8Array }>
   getConfig(options: { fs: unknown; dir: string; gitdir: string; path: string }): Promise<string | undefined>
-  fetch(options: { fs: unknown; dir: string; gitdir: string; remote: string; http: IsomorphicGitHttpClient; singleBranch?: boolean; onAuth?: () => { username: string; password: string } | void }): Promise<void>
+  fetch(options: { fs: unknown; dir: string; gitdir: string; remote: string; http: IsomorphicGitHttpClient; singleBranch?: boolean; prune?: boolean; onAuth?: () => { username: string; password: string } | void }): Promise<{ defaultBranch: string | null; fetchHead: string | null; fetchHeadDescription: string | null }>
   push(options: { fs: unknown; dir: string; gitdir: string; remote: string; ref: string; remoteRef: string; http: IsomorphicGitHttpClient; force: boolean; onAuth?: () => { username: string; password: string } | void }): Promise<void>
   listRemotes(options: { fs: unknown; dir: string; gitdir: string }): Promise<Array<{ remote: string; url: string }>>
   addRemote(options: { fs: unknown; dir: string; gitdir: string; remote: string; url: string }): Promise<void>

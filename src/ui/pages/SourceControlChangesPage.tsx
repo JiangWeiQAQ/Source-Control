@@ -1,4 +1,4 @@
-import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Spacer, Text, useEffect, useState, VStack } from "scripting"
+import { Button, HStack, Image, List, Navigation, NavigationStack, ProgressView, Section, Spacer, Text, useEffect, useRef, useState, VStack } from "scripting"
 import { GitService } from "../../core/GitService"
 import { GitRepositoryStatus } from "../../core/types"
 import { SourceControlDiffView } from "../SourceControlDiffView"
@@ -7,7 +7,7 @@ import { SourceControlSettingsView } from "../SourceControlSettingsView"
 import { SourceControlHistoryCompareView } from "../SourceControlHistoryCompareView"
 import { AppLanguage } from "../localization"
 import { validateCommitTitle, COMMIT_MESSAGE_MAX_LENGTH, CommitTitleValidationError } from "../commitMessage"
-import { enumerateProjectFiles, ProjectFileEntry } from "../projectFiles"
+import { enumerateProjectFiles, ProjectFileEntry, ProjectFileScanCancellationController } from "../projectFiles"
 import { useTranslator } from "../useLocalization"
 import { useUISettings } from "../useUISettings"
 import { AllFilesSection, ChangesFileBrowser, ChangesSummaryCard, ErrorSection, folderGroups, projectFileGroups, CloseButton, ToolbarIconButton } from "../components"
@@ -55,22 +55,30 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   const [skippedDirectories, setSkippedDirectories] = useState<string[]>([])
   const [hasPartialFileScanFailure, setHasPartialFileScanFailure] = useState(false)
   const [feedbackBanner, setFeedbackBanner] = useState<{ type: "restore" | "reset"; message: string } | null>(null)
+  const scanAbortControllerRef = useRef<ProjectFileScanCancellationController | null>(null)
   const sectionTitle = (zh: string, en: string) => language === "zh-Hans" ? zh : en
 
   const loadAllFiles = async () => {
+    scanAbortControllerRef.current?.abort()
+    const controller = new ProjectFileScanCancellationController()
+    scanAbortControllerRef.current = controller
     if (!projectPath) {
       setAllFiles([])
       setSkippedDirectories([])
       setHasPartialFileScanFailure(false)
+      scanAbortControllerRef.current = null
       return
     }
     try {
-      const result = await enumerateProjectFiles(projectPath)
+      const result = await enumerateProjectFiles(projectPath, controller.signal)
+      if (controller.signal.aborted || scanAbortControllerRef.current !== controller) return
       setAllFiles(result.files)
       setSkippedDirectories(result.skippedDirectories)
       setHasPartialFileScanFailure(result.hasPartialFailure)
-    } catch {
-      console.error("[AllFiles] read failed")
+    } catch (error) {
+      if (!controller.signal.aborted) console.error("[AllFiles] read failed", error)
+    } finally {
+      if (scanAbortControllerRef.current === controller) scanAbortControllerRef.current = null
     }
   }
 
@@ -170,6 +178,10 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
 
   useEffect(() => {
     loadStatus().catch(console.error)
+    return () => {
+      scanAbortControllerRef.current?.abort()
+      scanAbortControllerRef.current = null
+    }
   }, [projectPath])
 
   const staged = status?.stagedChanges || []

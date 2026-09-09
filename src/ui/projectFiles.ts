@@ -31,6 +31,34 @@ export interface ProjectFileScanReader {
   isDirectory(path: string): Promise<boolean>
 }
 
+export interface ProjectFileScanCancellationSignal {
+  readonly aborted: boolean
+  addEventListener(event: "abort", listener: () => void): void
+  removeEventListener(event: "abort", listener: () => void): void
+}
+
+export class ProjectFileScanCancellationController {
+  private cancelled = false
+  private readonly listeners = new Set<() => void>()
+  readonly signal: ProjectFileScanCancellationSignal
+
+  constructor() {
+    const thisController = this
+    this.signal = {
+      get aborted() { return thisController.cancelled },
+      addEventListener: (_event, listener) => { thisController.listeners.add(listener) },
+      removeEventListener: (_event, listener) => { thisController.listeners.delete(listener) },
+    }
+  }
+
+  abort(): void {
+    if (this.cancelled) return
+    this.cancelled = true
+    for (const listener of this.listeners) listener()
+    this.listeners.clear()
+  }
+}
+
 const fileManagerScanReader: ProjectFileScanReader = {
   readDirectory: (path) => FileManager.readDirectory(path),
   isDirectory: (path) => FileManager.isDirectory(path),
@@ -43,11 +71,11 @@ interface ProjectFileScanTask {
   relativeDirectory: string
 }
 
-export async function enumerateProjectFiles(projectPath: string): Promise<ProjectFileScanResult> {
-  return enumerateProjectFilesWithReader(projectPath, fileManagerScanReader)
+export async function enumerateProjectFiles(projectPath: string, signal?: ProjectFileScanCancellationSignal): Promise<ProjectFileScanResult> {
+  return enumerateProjectFilesWithReader(projectPath, fileManagerScanReader, signal)
 }
 
-export async function enumerateProjectFilesWithReader(projectPath: string, reader: ProjectFileScanReader): Promise<ProjectFileScanResult> {
+export async function enumerateProjectFilesWithReader(projectPath: string, reader: ProjectFileScanReader, signal?: ProjectFileScanCancellationSignal): Promise<ProjectFileScanResult> {
   const files: ProjectFileEntry[] = []
   const skippedDirectories = new Set<string>()
   const queue: ProjectFileScanTask[] = [{ currentPath: projectPath, relativeDirectory: "" }]
@@ -63,6 +91,9 @@ export async function enumerateProjectFilesWithReader(projectPath: string, reade
     while (waiters.length > 0) waiters.shift()?.()
   }
 
+  const abortListener = () => wakeAllWorkers()
+  signal?.addEventListener("abort", abortListener)
+
   const enqueue = (task: ProjectFileScanTask) => {
     pendingTasks += 1
     queue.push(task)
@@ -70,34 +101,39 @@ export async function enumerateProjectFilesWithReader(projectPath: string, reade
   }
 
   const takeTask = async (): Promise<ProjectFileScanTask | null> => {
-    while (queueCursor >= queue.length && pendingTasks > 0) {
+    while (queueCursor >= queue.length && pendingTasks > 0 && !signal?.aborted) {
       await new Promise<void>((resolve) => waiters.push(resolve))
     }
-    if (queueCursor >= queue.length) return null
+    if (signal?.aborted || queueCursor >= queue.length) return null
     return queue[queueCursor++]
   }
 
   const processTask = async ({ currentPath, relativeDirectory }: ProjectFileScanTask): Promise<void> => {
+    if (signal?.aborted) return
     let entries: string[]
     try {
       entries = await reader.readDirectory(currentPath)
     } catch {
+      if (signal?.aborted) return
       skippedDirectories.add(normalizePath(currentPath))
       console.error("[AllFiles] read failed")
       return
     }
 
     for (const entry of entries) {
+      if (signal?.aborted) return
       const fullPath = Path.join(currentPath, entry)
       if (isExcludedEntry(entry, fullPath)) continue
 
       const relativePath = relativeDirectory ? Path.join(relativeDirectory, entry) : entry
       try {
         if (await reader.isDirectory(fullPath)) {
+          if (signal?.aborted) return
           enqueue({ currentPath: fullPath, relativeDirectory: relativePath })
           continue
         }
       } catch {
+        if (signal?.aborted) return
         skippedDirectories.add(normalizePath(fullPath))
         console.error("[AllFiles] read failed")
         continue
@@ -127,6 +163,7 @@ export async function enumerateProjectFilesWithReader(projectPath: string, reade
   }
 
   await Promise.all(Array.from({ length: PROJECT_FILE_SCAN_CONCURRENCY }, () => worker()))
+  signal?.removeEventListener("abort", abortListener)
   return {
     files: files.sort((a, b) => a.relativePath.localeCompare(b.relativePath)),
     skippedDirectories: Array.from(skippedDirectories).sort((a, b) => a.localeCompare(b)),

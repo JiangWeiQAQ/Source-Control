@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { enumerateProjectFilesWithReader, PROJECT_FILE_SCAN_CONCURRENCY, ProjectFileScanReader } from "../src/ui/projectFiles"
+import { enumerateProjectFilesWithReader, ProjectFileScanCancellationController, PROJECT_FILE_SCAN_CONCURRENCY, ProjectFileScanReader } from "../src/ui/projectFiles"
 
 class FixtureReader implements ProjectFileScanReader {
   private readonly directories: Map<string, string[]>
@@ -93,11 +93,35 @@ async function verifyConcurrencyLimit(): Promise<void> {
   assert(result.skippedDirectories.length === 0 && !result.hasPartialFailure, "受控并发不改变部分失败结果")
 }
 
+async function verifyCancellation(): Promise<void> {
+  const root = "/fixture/cancellation"
+  const directoryNames = Array.from({ length: PROJECT_FILE_SCAN_CONCURRENCY * 4 }, (_, index) => `dir-${index}`)
+  const directories: Record<string, string[]> = { [root]: directoryNames }
+  for (const directoryName of directoryNames) directories[`${root}/${directoryName}`] = [`${directoryName}.txt`]
+
+  const controller = new ProjectFileScanCancellationController()
+  const reader: ProjectFileScanReader = {
+    readDirectory: async (path) => {
+      if (path !== root) for (let index = 0; index < 8; index += 1) await Promise.resolve()
+      return directories[path] || []
+    },
+    isDirectory: async (path) => Object.prototype.hasOwnProperty.call(directories, path),
+  }
+
+  const scan = enumerateProjectFilesWithReader(root, reader, controller.signal)
+  await Promise.resolve()
+  controller.abort()
+  const result = await scan
+  assert(result.files.length < directoryNames.length, "取消信号可以中止未完成的文件扫描")
+  assert(result.skippedDirectories.length === 0 && !result.hasPartialFailure, "取消扫描不记录为部分失败")
+}
+
 async function run(): Promise<void> {
   await verifyNormalScan()
   await verifySingleDirectoryFailure()
   await verifyMultipleDirectoryFailures()
   await verifyConcurrencyLimit()
+  await verifyCancellation()
   console.log("🎉 文件扫描专项验证通过")
 }
 

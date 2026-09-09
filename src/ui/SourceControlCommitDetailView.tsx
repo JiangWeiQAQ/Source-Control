@@ -15,6 +15,7 @@ import {
 import { GitService } from "../core/GitService"
 import { GitCommitChangedFile, GitCommitDetail } from "../core/types"
 import { CloseButton } from "./CloseButton"
+import { useTranslator } from "./useLocalization"
 
 export interface SourceControlCommitDetailViewProps {
   gitService: GitService
@@ -80,6 +81,8 @@ function formatVersionSummary(shortOid: string, message: string): string {
   return `${shortOid} · ${summary}`
 }
 
+const COMMIT_DETAIL_FILE_DISPLAY_LIMIT = 200
+
 export function SourceControlCommitDetailView({
   gitService,
   oid,
@@ -88,6 +91,7 @@ export function SourceControlCommitDetailView({
   readOnly = false,
 }: SourceControlCommitDetailViewProps) {
   const dismiss = Navigation.useDismiss()
+  const { t } = useTranslator()
   const [detail, setDetail] = useState<GitCommitDetail | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [restoreErrorTitle, setRestoreErrorTitle] = useState<string | null>(null)
@@ -231,6 +235,8 @@ export function SourceControlCommitDetailView({
     }
   }
 
+  const displayedChangedFiles = detail?.changedFiles.slice(0, COMMIT_DETAIL_FILE_DISPLAY_LIMIT) ?? []
+  const undisplayedChangedFileCount = (detail?.changedFiles.length ?? 0) - displayedChangedFiles.length
   const title = shortOid || (detail ? detail.shortOid : "Commit Detail")
 
   return (
@@ -408,7 +414,7 @@ export function SourceControlCommitDetailView({
                 无文件变动
               </Text>
             ) : (
-              detail.changedFiles.map((file) => {
+              displayedChangedFiles.map((file) => {
                 const badge = formatChangeTypeBadge(file.changeType)
                 const { filename, directory } = splitPath(file.filepath)
 
@@ -437,6 +443,11 @@ export function SourceControlCommitDetailView({
                 )
               })
             )}
+            {undisplayedChangedFileCount > 0 ? (
+              <Text font="footnote" foregroundStyle="secondaryLabel">
+                {t("commitDetailFilesNotShown").replace("{count}", String(undisplayedChangedFileCount))}
+              </Text>
+            ) : null}
           </Section>
         </>
       ) : null}

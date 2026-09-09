@@ -4,7 +4,7 @@
  */
 
 import { GitRepository } from "./GitRepository"
-import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, GitSyncRecord, IsomorphicGitAdapter } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitDiffResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotCleanupResult, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, GitSyncRecord, IsomorphicGitAdapter } from "./types"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { loadBufferPolyfill } from "../polyfills"
 import { ensureBaseline, recordSync, listSyncRecords as readSyncRecords } from "./GitSyncHistory"
@@ -593,6 +593,16 @@ export class GitService {
   /** 将独立 Snapshot Tree 恢复至干净 Working Tree，不移动 HEAD、Index 或分支。 */
   async restoreSafetySnapshot(ref: string): Promise<GitSafetySnapshotRestoreResult> {
     return this.ensureRepository().restoreSafetySnapshot(ref)
+  }
+
+  /** 仅删除指定的独立 Snapshot ref，不触碰工作区、Index、HEAD、分支或 Git 对象。 */
+  async deleteSafetySnapshot(ref: string): Promise<void> {
+    return this.ensureRepository().deleteSafetySnapshot(ref)
+  }
+
+  /** 保留最近的有效 Snapshot refs，并删除更早的 refs；不执行 GC 或 prune。 */
+  async cleanupSafetySnapshots(retain?: number): Promise<GitSafetySnapshotCleanupResult> {
+    return this.ensureRepository().cleanupSafetySnapshots(retain)
   }
 
   async getHistory(limit?: number): Promise<GitCommitInfo[]> {

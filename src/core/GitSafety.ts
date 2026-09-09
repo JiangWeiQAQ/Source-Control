@@ -70,7 +70,7 @@ export class GitSafety {
   static validateSafetySnapshotRef(ref: string): string {
     const prefix = "refs/source-control/snapshots/"
     if (!ref || typeof ref !== "string" || !ref.startsWith(prefix)) {
-      throw new GitSafetyError("仅允许恢复 refs/source-control/snapshots/* 下的 Safety Snapshot", "INVALID_SNAPSHOT_REF", { ref })
+      throw new GitSafetyError("仅允许操作 refs/source-control/snapshots/* 下的 Safety Snapshot", "INVALID_SNAPSHOT_REF", { ref })
     }
     const suffix = ref.slice(prefix.length)
     if (!suffix || suffix.startsWith("/") || suffix.endsWith("/") || suffix.includes("..") || suffix.includes("//") || /[\\\\\u0000-\u001f]/.test(ref)) {

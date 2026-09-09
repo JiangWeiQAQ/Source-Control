@@ -3,7 +3,7 @@
  * 封装单个 Git 仓库的具体操作，隐藏 isomorphic-git 的低层调用细节
  */
 
-import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
+import { GitAheadBehind, GitAuthor, GitBranchResetResult, GitChange, GitCommitChangedFile, GitCommitDetail, GitCommitInfo, GitCommitResult, GitCommitWorkingTreeRestoreResult, GitPullResult, GitPushResult, GitRemoteBranch, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus, GitSafetySnapshotCleanupResult, GitSafetySnapshotInfo, GitSafetySnapshotRestoreResult, GitSafetySnapshotResult, IsomorphicGitAdapter } from "./types"
 import { GitStatus } from "./GitStatus"
 import { GitSafety, GitSafetyError } from "./GitSafety"
 import { GitDiff } from "./GitDiff"
@@ -835,39 +835,69 @@ export class GitRepository {
     }
   }
 
+  private async enumerateSafetySnapshots(): Promise<GitSafetySnapshotInfo[]> {
+    const prefix = "refs/source-control/snapshots"
+    const suffixes = await this.git.listRefs({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, filepath: prefix })
+    const snapshots: GitSafetySnapshotInfo[] = []
+    for (const suffix of suffixes) {
+      const ref = `${prefix}/${suffix}`
+      try {
+        const oid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref })
+        const entry = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid })
+        const message = entry.commit.message.trim()
+        if (!message.startsWith("snapshot: ")) continue
+        snapshots.push({
+          ref,
+          oid: entry.oid,
+          shortOid: entry.oid.slice(0, 7),
+          message,
+          reason: message.slice("snapshot: ".length),
+          timestamp: entry.commit.author.timestamp,
+          parentOid: entry.commit.parent[0] ?? "",
+        })
+      } catch {
+        // 单个 ref 损坏或不可读时跳过，保留其余有效 Snapshot。
+      }
+    }
+    return snapshots.sort((left, right) => right.timestamp - left.timestamp || right.ref.localeCompare(left.ref))
+  }
+
   /**
    * 仅枚举 refs/source-control/snapshots/* 下可读且格式有效的 Snapshot Commit。
    * 损坏 ref 或非 Snapshot message 会被跳过，不影响其余 Snapshot 列表。
    */
   async listSafetySnapshots(limit = 50): Promise<GitSafetySnapshotInfo[]> {
     const safeLimit = Math.max(1, Math.min(Number.isFinite(limit) ? Math.floor(limit) : 50, 200))
-    const prefix = "refs/source-control/snapshots"
     try {
-      const suffixes = await this.git.listRefs({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, filepath: prefix })
-      const snapshots: GitSafetySnapshotInfo[] = []
-      for (const suffix of suffixes) {
-        const ref = `${prefix}/${suffix}`
-        try {
-          const oid = await this.git.resolveRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref })
-          const entry = await this.git.readCommit({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, oid })
-          const message = entry.commit.message.trim()
-          if (!message.startsWith("snapshot: ")) continue
-          snapshots.push({
-            ref,
-            oid: entry.oid,
-            shortOid: entry.oid.slice(0, 7),
-            message,
-            reason: message.slice("snapshot: ".length),
-            timestamp: entry.commit.author.timestamp,
-            parentOid: entry.commit.parent[0] ?? "",
-          })
-        } catch {
-          // 单个 ref 损坏或不可读时跳过，保留其余有效 Snapshot。
-        }
-      }
-      return snapshots.sort((left, right) => right.timestamp - left.timestamp || right.ref.localeCompare(left.ref)).slice(0, safeLimit)
+      const snapshots = await this.enumerateSafetySnapshots()
+      return snapshots.slice(0, safeLimit)
     } catch (error) {
       throw new Error(GitSafety.formatErrorMessage(error, "读取 Safety Snapshot 列表"))
+    }
+  }
+
+  /** 仅删除指定的 Safety Snapshot ref，不触碰工作区、Index、HEAD、分支或 Git 对象。 */
+  async deleteSafetySnapshot(ref: string): Promise<void> {
+    const cleanRef = GitSafety.validateSafetySnapshotRef(ref)
+    try {
+      await this.git.deleteRef({ fs: this.fs, dir: this.projectPath, gitdir: this.gitdir, ref: cleanRef })
+    } catch (error) {
+      throw new Error(GitSafety.formatErrorMessage(error, "删除 Safety Snapshot"))
+    }
+  }
+
+  /** 保留最近的有效 Safety Snapshot refs，并删除更早的 refs；不执行 GC 或 prune。 */
+  async cleanupSafetySnapshots(retain = 50): Promise<GitSafetySnapshotCleanupResult> {
+    const safeRetain = Number.isFinite(retain) ? Math.max(0, Math.floor(retain)) : 50
+    try {
+      const snapshots = await this.enumerateSafetySnapshots()
+      const obsolete = snapshots.slice(safeRetain)
+      for (const snapshot of obsolete) {
+        await this.deleteSafetySnapshot(snapshot.ref)
+      }
+      return { deleted: obsolete.length, retained: snapshots.length - obsolete.length }
+    } catch (error) {
+      throw new Error(GitSafety.formatErrorMessage(error, "清理 Safety Snapshot"))
     }
   }
 

@@ -132,6 +132,11 @@ export interface GitSafetySnapshotResult {
   ref?: string
 }
 
+export interface GitSafetySnapshotCleanupResult {
+  deleted: number
+  retained: number
+}
+
 export interface GitSafetySnapshotRestoreResult {
   restored: boolean
   ref: string
@@ -311,6 +316,7 @@ export interface IsomorphicGitAdapter {
     }
   }): Promise<string>
   writeRef(options: { fs: unknown; dir: string; gitdir: string; ref: string; value: string; force?: boolean; symbolic?: boolean }): Promise<void>
+  deleteRef(options: { fs: unknown; dir: string; gitdir: string; ref: string }): Promise<void>
   updateIndex(options: { fs: unknown; dir: string; gitdir: string; filepath: string; oid?: string; mode?: string; add?: boolean; remove?: boolean; force?: boolean }): Promise<string | void>
   writeTree(options: { fs: unknown; dir: string; gitdir: string; tree: Array<{ mode: string; path: string; oid: string; type: "blob" | "tree" | "commit" }> }): Promise<string>
   checkout(options: { fs: unknown; dir: string; gitdir: string; filepaths?: string[]; ref?: string; force?: boolean }): Promise<void>

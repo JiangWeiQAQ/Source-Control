@@ -33,7 +33,7 @@ export function SourceControlSnapshotsView({
   const [snapshots, setSnapshots] = useState<GitSafetySnapshotInfo[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [activeOperation, setActiveOperation] = useState<"create" | `restore:${string}` | null>(null)
+  const [activeOperation, setActiveOperation] = useState<"create" | `restore:${string}` | `delete:${string}` | "cleanup" | null>(null)
 
   const loadSnapshots = async () => {
     setLoading(true)
@@ -72,6 +72,62 @@ export function SourceControlSnapshotsView({
         await Dialog.alert({ title: t("snapshotCreated"), message: result.shortOid || "" })
       } else {
         await Dialog.alert({ title: t("noChangesTitle"), message: t("workingTreeIsClean") })
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveOperation(null)
+    }
+  }
+
+  const deleteSnapshot = async (snapshot: GitSafetySnapshotInfo) => {
+    if (activeOperation !== null) return
+
+    const selected = await Dialog.actionSheet({
+      title: t("deleteSnapshotQuestion"),
+      message: t("deleteSnapshotMessage"),
+      actions: [{ label: t("deleteSnapshot"), destructive: true }],
+    })
+    if (selected !== 0) return
+
+    const operation = `delete:${snapshot.ref}` as const
+    setActiveOperation(operation)
+    setErrorMessage(null)
+    try {
+      await gitService.deleteSafetySnapshot(snapshot.ref)
+      await loadSnapshots()
+      await Dialog.alert({ title: t("snapshotDeleted"), message: snapshot.shortOid })
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error))
+    } finally {
+      setActiveOperation(null)
+    }
+  }
+
+  const cleanupSnapshots = async () => {
+    if (activeOperation !== null) return
+
+    const selected = await Dialog.actionSheet({
+      title: t("cleanupSnapshotsQuestion"),
+      message: t("cleanupSnapshotsMessage"),
+      actions: [{ label: t("cleanupSnapshots"), destructive: true }],
+    })
+    if (selected !== 0) return
+
+    setActiveOperation("cleanup")
+    setErrorMessage(null)
+    try {
+      const result = await gitService.cleanupSafetySnapshots(50)
+      await loadSnapshots()
+      if (result.deleted === 0) {
+        await Dialog.alert({ title: t("snapshotCleanupCompleted"), message: t("noOldSnapshotsToClean") })
+      } else {
+        await Dialog.alert({
+          title: t("snapshotCleanupCompleted"),
+          message: t("snapshotsCleanupResult")
+            .replace("{deleted}", String(result.deleted))
+            .replace("{retained}", String(result.retained)),
+        })
       }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -120,6 +176,14 @@ export function SourceControlSnapshotsView({
               disabled={loading || activeOperation !== null}
               action={loadSnapshots}
             />
+             <Button
+              title={activeOperation === "cleanup" ? t("cleaningSnapshots") : t("cleanupSnapshots")}
+              systemImage="trash"
+              buttonStyle="borderless"
+              role="destructive"
+              disabled={activeOperation !== null}
+              action={cleanupSnapshots}
+            />
             <Button
               title={activeOperation === "create" ? t("creating") : t("createSnapshot")}
               systemImage="archivebox"
@@ -151,6 +215,14 @@ export function SourceControlSnapshotsView({
           disabled={activeOperation !== null}
           action={createSnapshot}
         />
+        <Button
+          title={activeOperation === "cleanup" ? t("cleaningSnapshots") : t("cleanupSnapshots")}
+          systemImage="trash"
+          buttonStyle="bordered"
+          role="destructive"
+          disabled={activeOperation !== null}
+          action={cleanupSnapshots}
+        />
       </Section>
 
       {loading && snapshots.length === 0 ? (
@@ -175,6 +247,7 @@ export function SourceControlSnapshotsView({
         <Section header={<Text font="footnote">{t("snapshotsHeader").replace("{count}", String(snapshots.length))}</Text>}>
           {snapshots.map((snapshot) => {
             const isRestoring = activeOperation === `restore:${snapshot.ref}`
+            const isDeleting = activeOperation === `delete:${snapshot.ref}`
             return (
               <HStack key={snapshot.ref} spacing={12} alignment="center">
                 <VStack spacing={4} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
@@ -185,7 +258,7 @@ export function SourceControlSnapshotsView({
                   </HStack>
                 </VStack>
                 <Spacer />
-                {isRestoring ? <ProgressView /> : null}
+                {isRestoring || isDeleting ? <ProgressView /> : null}
                 <Button
                   title={isRestoring ? t("restoring") : t("restore")}
                   systemImage="arrow.counterclockwise"
@@ -193,6 +266,14 @@ export function SourceControlSnapshotsView({
                   role="destructive"
                   disabled={activeOperation !== null}
                   action={() => restoreSnapshot(snapshot)}
+                />
+                <Button
+                  title={isDeleting ? t("deletingSnapshot") : t("deleteSnapshot")}
+                  systemImage="trash"
+                  buttonStyle="bordered"
+                  role="destructive"
+                  disabled={activeOperation !== null}
+                  action={() => deleteSnapshot(snapshot)}
                 />
               </HStack>
             )

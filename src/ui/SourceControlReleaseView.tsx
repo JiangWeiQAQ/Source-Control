@@ -8,6 +8,8 @@ import { ErrorSection } from "./components/ErrorSection"
 import { LoadingSection } from "./components/LoadingSection"
 import { formatRemoteRepository } from "../core/remote/RemoteValidation"
 import { useUISettings } from "./useUISettings"
+import { getReleaseNotes, setReleaseNotes } from "./releaseNotesStorage"
+import { useTranslator } from "./useLocalization"
 
 export interface SourceControlReleaseViewProps {
   gitService: GitService
@@ -21,6 +23,7 @@ function displayRepository(url: string): string {
 export function SourceControlReleaseView({ gitService, projectPath }: SourceControlReleaseViewProps) {
   const dismiss = Navigation.useDismiss()
   const { tokens } = useUISettings()
+  const { t } = useTranslator()
   const [version, setVersion] = useState("")
   const [notes, setNotes] = useState("")
   const [commitOid, setCommitOid] = useState("")
@@ -34,6 +37,7 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
   useEffect(() => {
     const load = async () => {
       try {
+        setNotes(getReleaseNotes(projectPath))
         await gitService.openRepository(projectPath)
         const service = new GitHubReleaseService(gitService, projectPath)
         setVersion(await service.getProjectVersion())
@@ -53,6 +57,11 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
     }
     load().catch(console.error)
   }, [gitService, projectPath])
+
+  const updateNotes = (value: string) => {
+    setNotes(value)
+    setReleaseNotes(projectPath, value)
+  }
 
   const publish = async () => {
     const normalized = validateVersion(version)
@@ -82,15 +91,16 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
   const normalizedVersion = validateVersion(version)
   const canPublish = !loading && configured && !publishing && normalizedVersion !== null
   return <NavigationStack>
-    <List navigationTitle="发布 Release" toolbar={{ topBarLeading: <CloseButton /> }}>
+    <List navigationTitle={t("release")} toolbar={{ topBarLeading: <CloseButton /> }}>
     {errorMessage ? <ErrorSection message={errorMessage} /> : null}
-    {loading ? <LoadingSection message="正在读取 Release 配置…" /> : null}
+    {loading ? <LoadingSection message={t("loadingReleaseConfiguration")} /> : null}
     <Section>
       <VStack spacing={tokens.rowContentSpacing} alignment="leading">
-        <Text font="headline">版本号</Text>
-        <TextField title="版本号" value={version} onChanged={setVersion} prompt="1.0.1" />
-        <Text font="headline">更新说明</Text>
-        <TextField title="更新说明" value={notes} onChanged={setNotes} axis="vertical" prompt="本次更新内容" />
+        <Text font="headline">{t("releaseVersion")}</Text>
+        <TextField title={t("releaseVersion")} value={version} onChanged={setVersion} prompt="1.0.1" />
+        <Text font="headline">{t("releaseNotes")}</Text>
+        <TextField title={t("releaseNotes")} value={notes} onChanged={updateNotes} axis="vertical" prompt={t("releaseNotesPlaceholder")} />
+         <Text font="caption" foregroundStyle="secondaryLabel">{t("releaseNotesHint")}</Text>
       </VStack>
     </Section>
     <Section>

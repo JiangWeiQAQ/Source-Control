@@ -1,6 +1,6 @@
 import { Script } from "scripting"
-import { listSyncRecords, recordSync, trimSyncRecords } from "./src/core/GitSyncHistory"
-import { GitSyncRecord } from "./src/core/types"
+import { listSyncRecords, recordSync, trimSyncRecords } from "../src/core/GitSyncHistory"
+import { GitSyncRecord } from "../src/core/types"
 
 const historyDir = `${FileManager.appGroupDocumentsDirectory}/source-control-sync-history`
 const historyFile = `${historyDir}/records.json`

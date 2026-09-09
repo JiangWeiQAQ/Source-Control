@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { validateRemoteUrlSyntax, validateSupportedRemoteUrl } from "./src/core/remote/RemoteValidation"
+import { validateRemoteUrlSyntax, validateSupportedRemoteUrl } from "../src/core/remote/RemoteValidation"
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message)

@@ -1,13 +1,13 @@
 import { Script } from "scripting"
-import { GitService } from "./src/core/GitService"
+import { GitService } from "../src/core/GitService"
 import {
   ProjectMetadataManager,
   ensureProjectMetadata,
   tryAutoRelocateProject,
   findRelocationCandidates,
   manualRelocateProject,
-} from "./src/core/ProjectMetadata"
-import { recordSync, listSyncRecords, migrateSyncHistory } from "./src/core/GitSyncHistory"
+} from "../src/core/ProjectMetadata"
+import { recordSync, listSyncRecords, migrateSyncHistory } from "../src/core/GitSyncHistory"
 
 const scriptsDir = FileManager.scriptsDirectory
 const tempTestPrefix = "RelocateFixture_" + Date.now()

@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { enumerateProjectFilesWithReader, ProjectFileScanReader } from "./src/ui/projectFiles"
+import { enumerateProjectFilesWithReader, ProjectFileScanReader } from "../src/ui/projectFiles"
 
 class FixtureReader implements ProjectFileScanReader {
   private readonly directories: Map<string, string[]>

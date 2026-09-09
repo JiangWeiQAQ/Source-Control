@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GitAheadBehind, GitPushResult, GitRepositoryStatus, GitSyncRecord } from "./src/core/types"
+import { GitAheadBehind, GitPushResult, GitRepositoryStatus, GitSyncRecord } from "../src/core/types"
 
 type ForceHarnessMode = "success" | "failure"
 

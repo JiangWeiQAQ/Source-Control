@@ -1,8 +1,8 @@
 import { Script } from "scripting"
-import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, RELEASE_TEMP_STALE_MS, fileContainsToken, isTextScanFile } from "./src/core/GitHubReleaseService"
-import { isValidVersion, validateVersion } from "./src/core/version"
-import { GitAheadBehind, GitCommitInfo, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus } from "./src/core/types"
-import { GitService } from "./src/core/GitService"
+import { GITHUB_RELEASE_TEMP_ROOT, GitHubReleaseService, GitHubReleaseTransport, GitHubReleaseTransportResponse, RELEASE_TEMP_STALE_MS, fileContainsToken, isTextScanFile } from "../src/core/GitHubReleaseService"
+import { isValidVersion, validateVersion } from "../src/core/version"
+import { GitAheadBehind, GitCommitInfo, GitRemoteCredential, GitRemoteInfo, GitRepositoryStatus } from "../src/core/types"
+import { GitService } from "../src/core/GitService"
 
 interface RequestRecord {
   url: string
@@ -126,6 +126,8 @@ async function makeProject(root: string, includeVersion = true): Promise<string>
   await FileManager.writeAsString(`${projectPath}/src/runtime.tsx`, "export const runtime = true\n", "utf8")
   await FileManager.createDirectory(`${projectPath}/docs`, true)
   await FileManager.writeAsString(`${projectPath}/docs/should-not-ship.md`, "development docs\n", "utf8")
+  await FileManager.createDirectory(`${projectPath}/tests`, true)
+  await FileManager.writeAsString(`${projectPath}/tests/verify-release-fixture.ts`, "development test\n", "utf8")
   await FileManager.writeAsString(`${projectPath}/assets/icon.txt`, "asset\n", "utf8")
   await FileManager.writeAsString(`${projectPath}/.git/config`, "secret git metadata\n", "utf8")
   await FileManager.writeAsString(`${projectPath}/source-control-sync-history/records.json`, "metadata\n", "utf8")
@@ -194,7 +196,7 @@ async function run(): Promise<void> {
     assert(archive.paths.includes("Source Control/script.json") && archive.paths.includes("Source Control/src/runtime.tsx"), "runtime files are missing from ZIP")
     assert(archive.paths.includes("Source Control/assets/icon.txt") && archive.paths.includes("Source Control/README.md"), "release resources are missing from ZIP")
     assert(archive.paths.includes("Source Control/release.json"), "release.json is missing from ZIP")
-    assert(!archive.paths.some((path) => path.includes(".git") || path.includes("source-control-sync-history") || path.includes("source-control-metadata") || path.includes("node_modules") || path.includes("verify-release.ts") || path.includes("docs/") || path.endsWith(".DS_Store")), "excluded files entered ZIP")
+    assert(!archive.paths.some((path) => path.includes(".git") || path.includes("source-control-sync-history") || path.includes("source-control-metadata") || path.includes("node_modules") || path.includes("verify-release.ts") || path.includes("docs/") || path.includes("tests/") || path.endsWith(".DS_Store")), "excluded files entered ZIP")
     assert(archive.manifest.name === "Source Control" && archive.manifest.version === "1.2.0" && archive.manifest.commitOid === commitOid && archive.manifest.minimumScriptingVersion === null && Number.isFinite(archive.manifest.releasedAt), "release.json is incorrect")
     assert(!new TextDecoder().decode(archive.allBytes).includes(token), "token entered ZIP")
     await assertTempClean()
@@ -419,14 +421,15 @@ async function run(): Promise<void> {
 
     // 验证排除文件不计入文件数和大小统计
     const excludedPreflightProject = await makeProject(`${root}/excluded-preflight-project`)
-    // 加入大量或大体积的应被排除文件，例如 .git 文件夹、verify 测试文件、.env、node_modules
+    // 加入大量或大体积的应被排除文件，例如 .git 文件夹、tests 测试目录、verify 测试文件、.env、node_modules
     await FileManager.createDirectory(`${excludedPreflightProject}/.git/objects`, true)
     await FileManager.writeAsString(`${excludedPreflightProject}/.git/objects/huge.pack`, "x".repeat(2000), "utf8")
     await FileManager.createDirectory(`${excludedPreflightProject}/node_modules/pkg`, true)
     await FileManager.writeAsString(`${excludedPreflightProject}/node_modules/pkg/index.js`, "x".repeat(2000), "utf8")
     await FileManager.createDirectory(`${excludedPreflightProject}/source-control-metadata`, true)
     await FileManager.writeAsString(`${excludedPreflightProject}/source-control-metadata/data.json`, "x".repeat(2000), "utf8")
-    await FileManager.writeAsString(`${excludedPreflightProject}/verify-something.ts`, "x".repeat(2000), "utf8")
+    await FileManager.createDirectory(`${excludedPreflightProject}/tests`, true)
+    await FileManager.writeAsString(`${excludedPreflightProject}/tests/verify-something.ts`, "x".repeat(2000), "utf8")
     // 限制 5 个文件、2000 字节。有效文件 5 个（index.tsx, script.json, README.md, src/runtime.tsx, assets/icon.txt，合计约 150 字节）
     // 如果排除了上述文件，则不会触发数量和大小超限报错，能正常成功发布
     const excludedPreflightResult = await new GitHubReleaseService(

@@ -1,7 +1,7 @@
 import { Script } from "scripting"
-import { JsonStore } from "./src/core/storage/JsonStore"
-import { listSyncRecords, recordSync } from "./src/core/GitSyncHistory"
-import { GitSyncRecord } from "./src/core/types"
+import { JsonStore } from "../src/core/storage/JsonStore"
+import { listSyncRecords, recordSync } from "../src/core/GitSyncHistory"
+import { GitSyncRecord } from "../src/core/types"
 
 const historyDir = `${FileManager.appGroupDocumentsDirectory}/source-control-sync-history`
 const historyFile = `${historyDir}/records.json`

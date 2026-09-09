@@ -6,13 +6,21 @@ import { SourceControlRemoteView } from "../SourceControlRemoteView"
 import { SourceControlSettingsView } from "../SourceControlSettingsView"
 import { SourceControlHistoryCompareView } from "../SourceControlHistoryCompareView"
 import { AppLanguage } from "../localization"
+import { validateCommitTitle, COMMIT_MESSAGE_MAX_LENGTH, CommitTitleValidationError } from "../commitMessage"
 import { enumerateProjectFiles, ProjectFileEntry } from "../projectFiles"
 import { useTranslator } from "../useLocalization"
 import { useUISettings } from "../useUISettings"
 import { AllFilesSection, ChangesFileBrowser, ChangesSummaryCard, ErrorSection, folderGroups, projectFileGroups, CloseButton, ToolbarIconButton } from "../components"
+import { isHistoryNavigationResult, HistoryNavigationResult } from "../SourceControlHistoryCompareView"
 
 export interface SourceControlChangesViewProps { gitService?: GitService; projectPath?: string }
 type ChangeFilter = "staged" | "unstaged"
+
+function commitTitleErrorMessage(error: CommitTitleValidationError, t: ReturnType<typeof useTranslator>["t"]): string {
+  if (error === "empty") return t("commitTitleEmpty")
+  if (error === "multiline") return t("commitTitleMultiline")
+  return t("commitTitleTooLong").replace("{count}", String(COMMIT_MESSAGE_MAX_LENGTH))
+}
 
 function EmptyChangesView({ loading, t, language }: { loading: boolean; t: (key: "fetching") => string; language: AppLanguage }) {
   return <Section>
@@ -34,7 +42,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   const [hasRemote, setHasRemote] = useState<boolean | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [activeOperation, setActiveOperation] = useState<string | null>(null)
-  const [commitMessage, setCommitMessage] = useState("")
+   const [commitMessage, setCommitMessage] = useState("")
   const [syncAhead, setSyncAhead] = useState(0)
   const [syncBehind, setSyncBehind] = useState(0)
   const [syncDiverged, setSyncDiverged] = useState(false)
@@ -46,6 +54,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   const [allFiles, setAllFiles] = useState<ProjectFileEntry[]>([])
   const [skippedDirectories, setSkippedDirectories] = useState<string[]>([])
   const [hasPartialFileScanFailure, setHasPartialFileScanFailure] = useState(false)
+  const [feedbackBanner, setFeedbackBanner] = useState<{ type: "restore" | "reset"; message: string } | null>(null)
   const sectionTitle = (zh: string, en: string) => language === "zh-Hans" ? zh : en
 
   const loadAllFiles = async () => {
@@ -112,13 +121,17 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   }
 
   const handleCommit = async () => {
-    const message = commitMessage.trim()
+    const validation = validateCommitTitle(commitMessage)
     const staged = status?.stagedChanges || []
-    if (!message || !staged.length || activeOperation) return
+                 if (validation.error) {
+      setErrorMessage(commitTitleErrorMessage(validation.error, t))
+      return
+    }
+    if (!staged.length || activeOperation) return
     setActiveOperation("commit")
     setErrorMessage(null)
     try {
-      await service.commit(message)
+      await service.commit(validation.value)
       setCommitMessage("")
       await loadStatus()
       await Dialog.alert({ title: t("committed"), message: "" })
@@ -211,6 +224,35 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
       frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
       toolbar={{ topBarLeading: <CloseButton />, topBarTrailing: <ToolbarIconButton systemImage="gearshape" onPress={openSettings} /> }}
     >
+      {feedbackBanner ? (
+        <Section>
+          <HStack
+            spacing={tokens.rowContentSpacing}
+            alignment="center"
+            frame={{ maxWidth: "infinity", minHeight: tokens.cardRowHeight, alignment: "leading" }}
+            padding={{ horizontal: tokens.cardPadding, vertical: tokens.cardPadding }}
+            background="secondarySystemBackground"
+            clipShape={{ type: "rect", cornerRadius: tokens.cardRadius }}
+          >
+            <Image
+              systemName={feedbackBanner.type === "restore" ? "arrow.counterclockwise.circle.fill" : "arrow.uturn.backward.circle.fill"}
+              foregroundStyle={feedbackBanner.type === "restore" ? "systemGreen" : "orange"}
+            />
+            <Text font="footnote" frame={{ maxWidth: "infinity", alignment: "leading" }}>
+              {feedbackBanner.message}
+            </Text>
+            <Button
+              action={() => setFeedbackBanner(null)}
+              buttonStyle="plain"
+              contentShape={{ kind: "interaction", shape: "rect" }}
+            >
+              <HStack frame={{ width: tokens.toolbarIconHitArea, height: tokens.toolbarIconHitArea, alignment: "center" }}>
+                <Image systemName="xmark" foregroundStyle="secondaryLabel" />
+              </HStack>
+            </Button>
+          </HStack>
+        </Section>
+      ) : null}
       {errorMessage ? <ErrorSection message={errorMessage} /> : null}
       <Section header={<Text>{sectionTitle("本次版本", "Current Version")}</Text>}>
         <ChangesSummaryCard
@@ -219,15 +261,22 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
           stageSubtitle={unstaged.length ? (staged.length ? `${staged.length} ${sectionTitle("个文件已加入", "files added")}` : `${unstaged.length} ${sectionTitle("个文件尚未加入", "files not added")}`) : undefined}
           onStage={unstaged.length ? () => { operateAll("stageAll").catch(console.error) } : undefined}
           stageDisabled={busy}
-          commitMessageTitle={sectionTitle("版本说明", "Commit Message")}
-          commitMessageValue={commitMessage.trim() || (hasCommit === false ? sectionTitle("首次版本", "Initial commit") : sectionTitle("尚未填写", "Not Set"))}
+          commitMessageTitle={t("commitMessage")}
+          commitMessageValue={validateCommitTitle(commitMessage).value || (hasCommit === false ? t("initialCommit") : t("noCommitMessage"))}
           onCommitMessage={async () => {
-            const value = await Dialog.prompt({ title: hasCommit === false ? sectionTitle("首次版本", "Initial Commit") : sectionTitle("版本说明", "Commit Message"), defaultValue: commitMessage, placeholder: sectionTitle("填写版本说明", "Add a commit message"), cancelLabel: t("cancel"), confirmLabel: "Save" })
-            if (value !== null) setCommitMessage(value)
+            const value = await Dialog.prompt({ title: hasCommit === false ? t("initialCommit") : t("commitMessage"), defaultValue: commitMessage, placeholder: t("commitTitlePlaceholder").replace("{count}", String(COMMIT_MESSAGE_MAX_LENGTH)), cancelLabel: t("cancel"), confirmLabel: t("save") })
+            if (value === null) return
+            const validation = validateCommitTitle(value)
+            if (validation.error) {
+              setErrorMessage(commitTitleErrorMessage(validation.error, t))
+              return
+            }
+            setErrorMessage(null)
+            setCommitMessage(validation.value)
           }}
           commitMessageDisabled={busy}
-          commitButtonTitle={sectionTitle("保存本地版本", "Commit Locally")}
-          commitButtonDisabled={!staged.length || !commitMessage.trim() || busy}
+          commitButtonTitle={t("commitLocally")}
+          commitButtonDisabled={validateCommitTitle(commitMessage).error !== null || !staged.length || busy}
           commitBusy={busy}
           onCommit={() => { handleCommit().catch(console.error) }}
           syncSummary={syncSummary}
@@ -239,7 +288,34 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
       <Section header={<Text>{sectionTitle("版本", "Versions")}</Text>}>
         <Button action={async () => {
           try {
-            await Navigation.present(<SourceControlHistoryCompareView gitService={service} language={language} projectName={projectPath?.split("/").filter(Boolean).pop()} onChanged={loadStatus} />)
+            const result = await Navigation.present<HistoryNavigationResult | null>(
+              <SourceControlHistoryCompareView
+                gitService={service}
+                language={language}
+                projectName={projectPath?.split("/").filter(Boolean).pop()}
+                onChanged={loadStatus}
+              />
+            )
+            if (isHistoryNavigationResult(result)) {
+              if ("restored" in result && result.restored) {
+                const shortOid = result.shortOid || result.oid.slice(0, 7)
+                setFeedbackBanner({
+                  type: "restore",
+                  message: language === "zh-Hans"
+                    ? `已恢复到版本 ${shortOid}，修改尚未暂存，请检查后保存新版本。`
+                    : `Restored to commit ${shortOid}. Changes are not staged yet, please review and commit.`
+                })
+              } else if ("reset" in result && result.reset) {
+                const shortOid = result.shortOid || result.toOid.slice(0, 7)
+                setFeedbackBanner({
+                  type: "reset",
+                  message: language === "zh-Hans"
+                    ? `已回退到版本 ${shortOid}，请确认当前工作区状态。`
+                    : `Reset to commit ${shortOid}. Please check your current working tree status.`
+                })
+              }
+              await loadStatus()
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
             console.error("[Changes] failed to open version compare", error)

@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GithubTokenCheckResult } from "./src/core/remote/RemoteValidation"
+import { GithubTokenCheckResult } from "../src/core/remote/RemoteValidation"
 
 type MockResponse = { status: number; json: () => Promise<unknown> }
 

@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GitAheadBehind, GitPushResult } from "./src/core/types"
+import { GitAheadBehind, GitPushResult } from "../src/core/types"
 
 interface PushScenario {
   name: string

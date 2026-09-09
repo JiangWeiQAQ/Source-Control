@@ -24,9 +24,9 @@
  * S. 不删除 gitdir
  */
 
-import { ProjectRegistry, PROJECTS_FILE } from "./src/core/project/ProjectRegistry"
-import { RepoMapStore, REPO_MAP_FILE } from "./src/core/project/RepoMapStore"
-import { JsonStore } from "./src/core/storage/JsonStore"
+import { ProjectRegistry, PROJECTS_FILE } from "../src/core/project/ProjectRegistry"
+import { RepoMapStore, REPO_MAP_FILE } from "../src/core/project/RepoMapStore"
+import { JsonStore } from "../src/core/storage/JsonStore"
 import { Script } from "scripting"
 let passedCount = 0
 let failedCount = 0

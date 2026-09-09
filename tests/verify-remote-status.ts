@@ -1,6 +1,6 @@
 import { Script } from "scripting"
-import { GitAheadBehind, GitCommitInfo, GitRemoteBranch, GitRemoteInfo } from "./src/core/types"
-import { RemoteStatusService, createRemoteStatusLoader, readRemoteStatus } from "./src/ui/useRemoteStatus"
+import { GitAheadBehind, GitCommitInfo, GitRemoteBranch, GitRemoteInfo } from "../src/core/types"
+import { RemoteStatusService, createRemoteStatusLoader, readRemoteStatus } from "../src/ui/useRemoteStatus"
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message)

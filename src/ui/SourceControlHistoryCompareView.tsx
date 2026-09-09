@@ -11,9 +11,9 @@ import { useUISettings } from "./useUISettings"
 
 type SyncCompareRow = { local: GitCommitInfo; sync: GitSyncRecord | null }
 type Target = { remote: string; branch: string } | null
-type HistoryNavigationResult = GitCommitWorkingTreeRestoreResult | GitBranchResetResult
+export type HistoryNavigationResult = GitCommitWorkingTreeRestoreResult | GitBranchResetResult
 
-function isHistoryNavigationResult(value: unknown): value is HistoryNavigationResult {
+export function isHistoryNavigationResult(value: unknown): value is HistoryNavigationResult {
   if (!value || typeof value !== "object") return false
   const result = value as { restored?: unknown; reset?: unknown; oid?: unknown; fromOid?: unknown; toOid?: unknown; shortOid?: unknown; changedFiles?: unknown }
   if (result.restored === true) return typeof result.oid === "string" && typeof result.shortOid === "string" && typeof result.changedFiles === "number"

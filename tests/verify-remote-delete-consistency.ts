@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { GitRemoteInfo } from "./src/core/types"
+import { GitRemoteInfo } from "../src/core/types"
 
 type DeleteChoice = "remove-remote-and-token" | "remove-remote-only" | "cancel"
 

@@ -388,7 +388,7 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 
 ### 验证结果
 
-- `scripting-ts run verify-remote-delete-consistency.ts`：13 项断言通过，覆盖删除 Remote + Token、仅删除 Remote、取消删除、删除后重新添加 Remote，以及旧请求晚返回。
+- `scripting-ts run tests/verify-remote-delete-consistency.ts`：13 项断言通过，覆盖删除 Remote + Token、仅删除 Remote、取消删除、删除后重新添加 Remote，以及旧请求晚返回。
 - `verify-remote-token-lifecycle.ts`：通过。
 - `verify-ui-race-fixes.ts`：通过。
 - TypeScript diagnostics：0 errors。
@@ -397,35 +397,54 @@ folder 切换当前仅由 `allFiles` 派生的 `projectFileGroups` 做内存查�
 
 本轮未修改 Git Core、credential key、Push / Pull / Force Push 实现、ProjectRegistry 或 UI Design System。
 
-## 2026/09/07 Settings / Remote Remote 状态加载收敛
+## 2026/09/08 Commit Message 与 Release Notes 职责分离
 
 ### 修改文件
 
-- `src/ui/useRemoteStatus.ts`
-- `src/ui/SourceControlSettingsView.tsx`
-- `src/ui/SourceControlRemoteView.tsx`
+- `src/ui/commitMessage.ts`
+- `src/ui/releaseNotesStorage.ts`
 - `src/ui/pages/SourceControlChangesPage.tsx`
-- `src/ui/index.ts`
-- `verify-remote-status.ts`
+- `src/ui/SourceControlReleaseView.tsx`
+- `src/ui/localization.ts`
+- `verify-commit-release-notes.ts`
+- `verify-release.ts`
 - `docs/refactor-record.md`
 
 ### 实现内容
 
-- 新增小型 `useRemoteStatus()` 与 `readRemoteStatus()`，统一读取 `remotes`、selected Remote、Remote branches、current branch、credential、credential binding、ahead/behind、loading、error 和 latest-request-wins。
-- Settings 保留 `checked` 与主动 GitHub Token 验证结果的页面语义；Remote 页面按需读取 `hasLocalCommit`。共享 hook 不包含 Push、Pull、Force Push、Dialog 或 Navigation。
-- 统一 preferred Remote → `origin` → 首个 Remote 的选择规则；删除 Remote 后可按 Remote name 继续读取未绑定的 Keychain credential。
-- Settings 与 Remote 的添加、修改、删除、Token、Check、Fetch 和 Settings 返回刷新均改用共享 refresh；Remote 页面将过期刷新结果视为 `null`，不会继续驱动操作。
-- Remote 页面接收 `projectPath`，用于项目切换时使旧异步请求失效。
+- Changes 页面将用户提交入口限制为短标题：先 `trim()`，拒绝空值和 `\\r` / `\\n` 多行输入，并使用 `Array.from()` 按 Unicode code point 限制最多 72 个字符；保存 prompt 和最终 `service.commit()` 前均执行校验。
+- `GitService`、`GitRepository`、`GitSafety.validateCommitMessage()`、自动 Revert、Git 历史和 Push 流程未修改。72 字符限制只放在用户 Commit UI 边界，避免影响内部自动生成的 Revert message 与公共 Core API。
+- Changes UI 使用“提交说明 / Commit Message”；Release UI 使用“更新说明 / Release Notes”，并明确提示更新说明只用于 GitHub Release，不会成为 Commit Message。
+- Release Notes 使用 Scripting `Storage` 单独保存，key 前缀为 `source-control.release-notes.v1:`，以规范化后的 `projectPath` 隔离不同项目；不写入 Git 工作区、`script.json.description`、ProjectRegistry、Keychain 或 Commit。
+- Release 页面加载项目草稿，编辑时同步保存，发布时继续通过既有 `releaseNotes` 参数独立传入 `GitHubReleaseService`。既有 Core 对空 Notes 的默认回退及已存在 Release 不更新 body 的行为保持不变。
+- `verify-release.ts` 增加 create payload `body` 等于独立 Release Notes 的断言。
 
 ### 验证结果
 
-- `verify-remote-status.ts`：通过，覆盖两页面投影一致、origin fallback、preferred fallback、无 Remote、仅删除 Remote 的未绑定 credential，以及旧请求晚返回。
-- `verify-remote-delete-consistency.ts`：通过。
-- `verify-remote-token-lifecycle.ts`：通过。
-- `verify-ui-race-fixes.ts`：通过。
+- `verify-commit-release-notes.ts`：通过，覆盖 trim、空标题、多行标题、72/73 个 Unicode 字符、中文与 emoji code point 计数、项目间 Notes 隔离、保存/重新读取及路径末尾斜杠规范化。
+- `verify-release.ts`：通过，既有 Release ZIP、安全边界、上传、互斥、SemVer 等场景全部通过，并验证独立 Notes 写入 GitHub Release body。
+- `verify-project-relocation.ts`：19/19 通过。
+- `verify-project-registry.ts`：27/27 通过。
+- `verify-push-core.ts`：通过。
+- `verify-force-push-local.ts`：通过。
+- `verify-json-store-sync-history.ts`：通过。
+- `verify-sync-history-retention.ts`：通过。
 - 全项目 TypeScript diagnostics：0 errors。
 
-### 范围确认
+### 未解决问题
 
-本轮未修改 Git Core、credential key、RemoteValidation、ProjectRegistry、Push / Pull / Force Push Core 或 UI Design System。
+- Release Notes 草稿当前按规范化后的实际 `projectPath` 建 key；项目 relocation 后若路径发生变化，可能产生新的草稿 key。本轮不扩展 ProjectRegistry schema，保留路径隔离策略。
 
+
+## 2026/09/08 verify 测试目录整理
+
+### 修改内容
+
+- 根目录 15 个 `verify-*.ts` 已移动到 `tests/`，未删除测试内容；`probe-http-receivepack.ts` 保留在根目录。
+- 移动后的测试统一使用 `../src/...` 相对 import，并通过 `scripting-ts run tests/<filename>.ts` 执行。
+- Release 打包过滤明确排除整个 `tests/` 目录；正式 `src/` 与 `index.tsx` 均无运行时 `tests/` 依赖。
+
+### 验证结果
+
+- 根目录不再存在 `verify-*.ts`，`tests/` 共 15 个测试文件。
+- 移动后测试中的旧 `./src/` import：0 处。

@@ -1,5 +1,5 @@
 import { Script } from "scripting"
-import { enumerateProjectFilesWithReader, ProjectFileScanReader } from "../src/ui/projectFiles"
+import { enumerateProjectFilesWithReader, PROJECT_FILE_SCAN_CONCURRENCY, ProjectFileScanReader } from "../src/ui/projectFiles"
 
 class FixtureReader implements ProjectFileScanReader {
   private readonly directories: Map<string, string[]>
@@ -62,11 +62,43 @@ async function verifyMultipleDirectoryFailures(): Promise<void> {
   assert(result.files.length === 1 && result.files[0].relativePath === "keep/kept.txt", "多目录失败后其他目录文件仍返回")
 }
 
+async function verifyConcurrencyLimit(): Promise<void> {
+  const root = "/fixture/concurrency"
+  const directoryNames = Array.from({ length: PROJECT_FILE_SCAN_CONCURRENCY * 4 }, (_, index) => `dir-${index}`)
+  const directories: Record<string, string[]> = {
+    [root]: directoryNames,
+  }
+  for (const directoryName of directoryNames) directories[`${root}/${directoryName}`] = [`${directoryName}.txt`]
+
+  let activeOperations = 0
+  let maxActiveOperations = 0
+  const reader: ProjectFileScanReader = {
+    readDirectory: async (path) => {
+      activeOperations += 1
+      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+      await Promise.resolve()
+      try { return directories[path] || [] } finally { activeOperations -= 1 }
+    },
+    isDirectory: async (path) => {
+      activeOperations += 1
+      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+      await Promise.resolve()
+      try { return Object.prototype.hasOwnProperty.call(directories, path) } finally { activeOperations -= 1 }
+    },
+  }
+
+  const result = await enumerateProjectFilesWithReader(root, reader)
+  assert(maxActiveOperations > 1 && maxActiveOperations <= PROJECT_FILE_SCAN_CONCURRENCY, `扫描并发不超过 ${PROJECT_FILE_SCAN_CONCURRENCY}`)
+  assert(result.files.length === directoryNames.length && result.files[0].relativePath === "dir-0/dir-0.txt", "受控并发仍返回完整且排序后的文件结果")
+  assert(result.skippedDirectories.length === 0 && !result.hasPartialFailure, "受控并发不改变部分失败结果")
+}
+
 async function run(): Promise<void> {
   await verifyNormalScan()
   await verifySingleDirectoryFailure()
   await verifyMultipleDirectoryFailures()
-  console.log("🎉 文件扫描部分失败专项验证通过")
+  await verifyConcurrencyLimit()
+  console.log("🎉 文件扫描专项验证通过")
 }
 
 run().catch((error: unknown) => console.error("文件扫描专项验证失败:", error)).finally(() => Script.exit())

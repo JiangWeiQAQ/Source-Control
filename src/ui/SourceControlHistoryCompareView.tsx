@@ -20,7 +20,7 @@ export function isHistoryNavigationResult(value: unknown): value is HistoryNavig
   return result.reset === true && typeof result.fromOid === "string" && typeof result.toOid === "string" && typeof result.shortOid === "string"
 }
 
-export interface SourceControlHistoryCompareViewProps { gitService: GitService; language?: AppLanguage; onChanged?: () => Promise<void>; projectName?: string }
+export interface SourceControlHistoryCompareViewProps { gitService: GitService; language?: AppLanguage; projectName?: string }
 
 export function alignHistory(local: GitCommitInfo[], remote: GitCommitInfo[]): Array<{ local: GitCommitInfo | null; remote: GitCommitInfo | null }> {
   const remoteOids = new Set(remote.map((item) => item.oid))
@@ -82,7 +82,7 @@ function SyncNodeCell({ commit, record, onSelect, language, tokens }: { commit: 
   </Button>
 }
 
-export function SourceControlHistoryCompareView({ gitService, language = "en", onChanged, projectName }: SourceControlHistoryCompareViewProps) {
+export function SourceControlHistoryCompareView({ gitService, language = "en", projectName }: SourceControlHistoryCompareViewProps) {
   const dismiss = Navigation.useDismiss()
   const t = createTranslator(language)
   const { tokens } = useUISettings()
@@ -132,7 +132,6 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", o
     try {
       const result = await Navigation.present<HistoryNavigationResult | null>(<SourceControlCommitDetailView gitService={gitService} oid={commit.oid} shortOid={commit.shortOid} />)
       if (isHistoryNavigationResult(result)) {
-        try { await onChanged?.() } catch (callbackError) { console.error("[HistoryCompare] restore callback failed", callbackError) }
         dismiss(result)
       }
     } catch (error) { setState("error"); setErrorMessage(error instanceof Error ? error.message : String(error)) }

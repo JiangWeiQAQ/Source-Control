@@ -293,7 +293,6 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
                 gitService={service}
                 language={language}
                 projectName={projectPath?.split("/").filter(Boolean).pop()}
-                onChanged={loadStatus}
               />
             )
             if (isHistoryNavigationResult(result)) {

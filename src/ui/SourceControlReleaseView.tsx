@@ -10,17 +10,19 @@ import { formatRemoteRepository } from "../core/remote/RemoteValidation"
 import { useUISettings } from "./useUISettings"
 import { getReleaseNotes, setReleaseNotes } from "./releaseNotesStorage"
 import { useTranslator } from "./useLocalization"
+import { RecentOperationHandler } from "./recentOperation"
 
 export interface SourceControlReleaseViewProps {
   gitService: GitService
   projectPath: string
+  onRecentOperation?: RecentOperationHandler
 }
 
 function displayRepository(url: string): string {
   return formatRemoteRepository(url)
 }
 
-export function SourceControlReleaseView({ gitService, projectPath }: SourceControlReleaseViewProps) {
+export function SourceControlReleaseView({ gitService, projectPath, onRecentOperation }: SourceControlReleaseViewProps) {
   const dismiss = Navigation.useDismiss()
   const { tokens } = useUISettings()
   const { t } = useTranslator()
@@ -80,7 +82,9 @@ export function SourceControlReleaseView({ gitService, projectPath }: SourceCont
     setResult(null)
     try {
       const releaseService = new GitHubReleaseService(gitService, projectPath)
-      setResult(await releaseService.publishCurrentProject({ version: normalized, releaseNotes: notes }))
+      const result = await releaseService.publishCurrentProject({ version: normalized, releaseNotes: notes })
+      setResult(result)
+      onRecentOperation?.({ kind: "release", identifier: result.version })
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     } finally {

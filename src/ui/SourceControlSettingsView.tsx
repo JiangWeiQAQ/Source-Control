@@ -14,10 +14,12 @@ import { useTranslator } from "./useLocalization"
 import { UIDensity } from "./design"
 import { useUISettings } from "./useUISettings"
 import { RemoteStatusState, useRemoteStatus } from "./useRemoteStatus"
+import { RecentOperationHandler } from "./recentOperation"
 
 export interface SourceControlSettingsViewProps {
   onLanguageChanged?: () => void
   onRemoteChanged?: () => Promise<void>
+  onRecentOperation?: RecentOperationHandler
   gitService?: GitService
   projectPath?: string
 }
@@ -58,7 +60,7 @@ function githubStatusLabel(state: RemoteStatusState, language: AppLanguage): str
   return copy(language, "已同步", "Synced")
 }
 
-export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, gitService, projectPath }: SourceControlSettingsViewProps) {
+export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, onRecentOperation, gitService, projectPath }: SourceControlSettingsViewProps) {
   const dismiss = Navigation.useDismiss()
   const { t, language, refreshLanguage } = useTranslator()
   const { density, tokens, setDensity } = useUISettings()
@@ -348,7 +350,8 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
     try {
       const branch = await gitService.getCurrentBranch()
       if (!branch) throw new Error("Push requires a local branch.")
-      await gitService.pushRemote(selectedRemote.name, branch)
+      const result = await gitService.pushRemote(selectedRemote.name, branch)
+      onRecentOperation?.({ kind: "push", identifier: result.localOid.slice(0, 7) })
       await checkGithubStatus()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -391,7 +394,8 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
       })
       if (!secondConfirm) return
 
-      await gitService.forcePushLocalToRemote(selectedRemote.name, pushBranch)
+      const result = await gitService.forcePushLocalToRemote(selectedRemote.name, pushBranch)
+      onRecentOperation?.({ kind: "force-push", identifier: result.localOid.slice(0, 7) })
       await checkGithubStatus()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
@@ -408,7 +412,7 @@ export function SourceControlSettingsView({ onLanguageChanged, onRemoteChanged, 
   const openReleaseSettings = async () => {
     if (!gitService || !projectPath || busy) return
     try {
-      await Navigation.present(<SourceControlReleaseView gitService={gitService} projectPath={projectPath} />)
+      await Navigation.present(<SourceControlReleaseView gitService={gitService} projectPath={projectPath} onRecentOperation={onRecentOperation} />)
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : String(error))
     }

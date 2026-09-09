@@ -5,11 +5,13 @@ import { CloseButton } from "./CloseButton"
 import { GitService } from "../core/GitService"
 import { useTranslator } from "./useLocalization"
 import { useUISettings } from "./useUISettings"
+import { RecentOperationHandler } from "./recentOperation"
 
 export interface SourceControlRemoteViewProps {
   gitService: GitService
   projectPath?: string
   onChanged: () => Promise<void>
+  onRecentOperation?: RecentOperationHandler
   onOpenSettings?: () => Promise<void>
 }
 
@@ -17,7 +19,7 @@ type ActiveOperation = "push" | "pull" | "force-push" | null
 
 type RemoteState = Pick<RemoteStatusState, "remotes" | "selected" | "branches" | "branch" | "aheadBehind" | "hasLocalCommit">
 
-export function SourceControlRemoteView({ gitService, projectPath, onChanged, onOpenSettings }: SourceControlRemoteViewProps) {
+export function SourceControlRemoteView({ gitService, projectPath, onChanged, onRecentOperation, onOpenSettings }: SourceControlRemoteViewProps) {
   const { t } = useTranslator()
   const { tokens } = useUISettings()
   const remoteStatus = useRemoteStatus(gitService, projectPath, { initialLoading: true, includeLocalCommit: true })
@@ -88,7 +90,8 @@ export function SourceControlRemoteView({ gitService, projectPath, onChanged, on
           return
         }
       }
-      await gitService.pushRemote(remoteName, branch)
+      const result = await gitService.pushRemote(remoteName, branch)
+      onRecentOperation?.({ kind: "push", identifier: result.localOid.slice(0, 7) })
       await refreshRemoteStatus({ preferredRemoteName: remoteName })
       await notifyChanged()
     } catch (error) {
@@ -128,7 +131,8 @@ export function SourceControlRemoteView({ gitService, projectPath, onChanged, on
         confirmLabel: t("sync"),
       })
       if (!confirmed) return
-      await gitService.pushRemote(selectedRemote.name, latest.branch || state.branch)
+      const result = await gitService.pushRemote(selectedRemote.name, latest.branch || state.branch)
+      onRecentOperation?.({ kind: "push", identifier: result.localOid.slice(0, 7) })
       await refreshRemoteStatus({ preferredRemoteName: selectedRemote.name })
       await notifyChanged()
     } catch (error) {
@@ -167,7 +171,8 @@ export function SourceControlRemoteView({ gitService, projectPath, onChanged, on
       if (!firstConfirmed) return
       const secondConfirmed = await Dialog.confirm({ title: "确认覆盖 GitHub？", message: `GitHub 当前：${sync.remoteOid.slice(0, 7)}\n本地当前：${sync.localOid.slice(0, 7)}\n\n此操作会重写 GitHub 分支历史。`, cancelLabel: t("cancel"), confirmLabel: "覆盖 GitHub" })
       if (!secondConfirmed) return
-      await gitService.forcePushLocalToRemote(selectedRemote.name, latest.branch || state.branch)
+      const result = await gitService.forcePushLocalToRemote(selectedRemote.name, latest.branch || state.branch)
+      onRecentOperation?.({ kind: "force-push", identifier: result.localOid.slice(0, 7) })
       await fetchLatestState(selectedRemote.name)
       await notifyChanged()
     } catch (error) {

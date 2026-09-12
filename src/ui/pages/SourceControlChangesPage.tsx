@@ -5,6 +5,8 @@ import { SourceControlDiffView } from "../SourceControlDiffView"
 import { SourceControlRemoteView } from "../SourceControlRemoteView"
 import { SourceControlSettingsView } from "../SourceControlSettingsView"
 import { SourceControlHistoryCompareView } from "../SourceControlHistoryCompareView"
+import { SourceControlCommitDetailView } from "../SourceControlCommitDetailView"
+import { SourceControlReleaseView } from "../SourceControlReleaseView"
 import { AppLanguage } from "../localization"
 import { validateCommitTitle, COMMIT_MESSAGE_MAX_LENGTH, CommitTitleValidationError } from "../commitMessage"
 import { enumerateProjectFiles, ProjectFileEntry, ProjectFileScanCancellationController } from "../projectFiles"
@@ -59,8 +61,21 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
   const [recentOperation, setRecentOperation] = useState<RecentOperation | null>(null)
   const scanAbortControllerRef = useRef<ProjectFileScanCancellationController | null>(null)
   const sectionTitle = (zh: string, en: string) => language === "zh-Hans" ? zh : en
-  const handleRecentOperation: RecentOperationHandler = (operation) => setRecentOperation(operation)
+  const handleRecentOperation: RecentOperationHandler = (operation) => {
+    const destination = operation.destination || (operation.kind === "push" || operation.kind === "force-push" ? { kind: "remote" as const } : operation.kind === "release" ? { kind: "release" as const } : undefined)
+    const onPress = destination?.kind === "commit-detail"
+      ? () => { Navigation.present(<SourceControlCommitDetailView gitService={service} oid={destination.oid} shortOid={destination.shortOid} />).catch(console.error) }
+      : destination?.kind === "remote"
+        ? () => { openRemoteSync().catch(console.error) }
+        : destination?.kind === "release" && projectPath
+          ? () => { Navigation.present(<SourceControlReleaseView gitService={service} projectPath={projectPath} />).catch(console.error) }
+          : undefined
+    setRecentOperation({ ...operation, onPress })
+  }
 
+  const openRecentOperation = () => {
+    recentOperation?.onPress?.()
+  }
   const loadAllFiles = async () => {
     scanAbortControllerRef.current?.abort()
     const controller = new ProjectFileScanCancellationController()
@@ -144,7 +159,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
     try {
       await service.commit(validation.value)
       const latestCommit = (await service.getHistory(1))[0]
-      setRecentOperation({ kind: "commit", identifier: latestCommit?.shortOid || "HEAD" })
+      setRecentOperation({ kind: "commit", identifier: latestCommit?.shortOid || "HEAD", destination: latestCommit ? { kind: "commit-detail", oid: latestCommit.oid, shortOid: latestCommit.shortOid } : undefined })
       setCommitMessage("")
       await loadStatus()
       await Dialog.alert({ title: t("committed"), message: "" })
@@ -243,14 +258,16 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
     >
       {recentOperation ? (
         <Section>
-          <HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.cardRowHeight, alignment: "leading" }} padding={{ horizontal: tokens.cardPadding, vertical: tokens.cardPadding }} background="secondarySystemBackground" clipShape={{ type: "rect", cornerRadius: tokens.cardRadius }}>
+          <Button action={openRecentOperation} buttonStyle="plain" disabled={!recentOperation.onPress} contentShape={{ kind: "interaction", shape: "rect" }}>
+            <HStack spacing={tokens.rowContentSpacing} alignment="center" frame={{ maxWidth: "infinity", minHeight: tokens.cardRowHeight, alignment: "leading" }} padding={{ horizontal: tokens.cardPadding, vertical: tokens.cardPadding }} background="secondarySystemBackground" clipShape={{ type: "rect", cornerRadius: tokens.cardRadius }}>
             <Image systemName="checkmark.circle.fill" foregroundStyle="systemGreen" />
             <VStack spacing={tokens.compactSpacing} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
               <Text font="subheadline">{recentOperation.kind === "commit" ? "Commit" : recentOperation.kind === "push" ? "Push" : recentOperation.kind === "force-push" ? "Force Push" : recentOperation.kind === "restore" ? sectionTitle("恢复", "Restore") : recentOperation.kind === "reset" ? sectionTitle("回退", "Reset") : "Release"}</Text>
               <Text font="caption" foregroundStyle="secondaryLabel" lineLimit={2}>{recentOperation.kind === "commit" ? sectionTitle(`已保存版本 ${recentOperation.identifier}`, `Committed ${recentOperation.identifier}`) : recentOperation.kind === "push" ? sectionTitle(`已推送 ${recentOperation.identifier}`, `Pushed ${recentOperation.identifier}`) : recentOperation.kind === "force-push" ? sectionTitle(`已强制推送 ${recentOperation.identifier}`, `Force pushed ${recentOperation.identifier}`) : recentOperation.kind === "restore" ? sectionTitle(`已恢复到版本 ${recentOperation.identifier}`, `Restored ${recentOperation.identifier}`) : recentOperation.kind === "reset" ? sectionTitle(`已回退到版本 ${recentOperation.identifier}`, `Reset to ${recentOperation.identifier}`) : sectionTitle(`已发布版本 ${recentOperation.identifier}`, `Released version ${recentOperation.identifier}`)}</Text>
             </VStack>
             <Button action={() => setRecentOperation(null)} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}><HStack frame={{ width: tokens.toolbarIconHitArea, height: tokens.toolbarIconHitArea, alignment: "center" }}><Image systemName="xmark" foregroundStyle="secondaryLabel" /></HStack></Button>
-          </HStack>
+            </HStack>
+          </Button>
         </Section>
       ) : null}
 
@@ -328,7 +345,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
             if (isHistoryNavigationResult(result)) {
               if ("restored" in result && result.restored) {
                 const shortOid = result.shortOid || result.oid.slice(0, 7)
-                setRecentOperation({ kind: "restore", identifier: shortOid })
+                setRecentOperation({ kind: "restore", identifier: shortOid, destination: { kind: "commit-detail", oid: result.oid, shortOid } })
                 setFeedbackBanner({
                   type: "restore",
                   message: language === "zh-Hans"
@@ -337,7 +354,7 @@ export function SourceControlChangesPage({ gitService: propGitService, projectPa
                 })
               } else if ("reset" in result && result.reset) {
                 const shortOid = result.shortOid || result.toOid.slice(0, 7)
-                setRecentOperation({ kind: "reset", identifier: shortOid })
+                setRecentOperation({ kind: "reset", identifier: shortOid, destination: { kind: "commit-detail", oid: result.toOid, shortOid } })
                 setFeedbackBanner({
                   type: "reset",
                   message: language === "zh-Hans"

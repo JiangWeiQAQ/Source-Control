@@ -69,7 +69,8 @@ function LocalCommitCell({ commit, onSelect, tokens }: { commit: GitCommitInfo; 
   </Button>
 }
 
-function SyncNodeCell({ commit, record, onSelect, language, tokens }: { commit: GitCommitInfo; record: GitSyncRecord | null; onSelect: (commit: GitCommitInfo) => void; language: AppLanguage; tokens: UITokens }) {
+function SyncNodeCell({ commit, record, onSelect, language, tokens, noRemote = false }: { commit: GitCommitInfo; record: GitSyncRecord | null; onSelect: (commit: GitCommitInfo) => void; language: AppLanguage; tokens: UITokens; noRemote?: boolean }) {
+  if (noRemote) return <VStack frame={{ maxWidth: "infinity", minHeight: tokens.compareRowHeight, alignment: "center" }} padding={{ horizontal: tokens.compareHorizontalPadding, vertical: tokens.compactPadding }}><Text font="caption" foregroundStyle="secondaryLabel">{language === "zh-Hans" ? "未配置 GitHub" : "GitHub Not Configured"}</Text></VStack>
   if (!record) return <VStack frame={{ maxWidth: "infinity", minHeight: tokens.compareRowHeight, alignment: "center" }}><Text font="title3" foregroundStyle="tertiaryLabel">⋮</Text></VStack>
   const isBaseline = record.kind === "baseline"
   return <Button action={() => onSelect(commit)} buttonStyle="plain" contentShape={{ kind: "interaction", shape: "rect" }}>
@@ -96,8 +97,9 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", p
   const resolveTarget = async (): Promise<Target> => {
     const remotes = await gitService.listRemotes()
     const remote = remotes.find((item) => item.name === "origin") || remotes[0]
+    if (!remote || !(await gitService.hasRemoteCredential(remote.name))) return null
     const branch = await gitService.getCurrentBranch()
-    return remote && branch ? { remote: remote.name, branch } : null
+    return branch ? { remote: remote.name, branch } : null
   }
 
   const load = async () => {
@@ -106,7 +108,12 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", p
     try {
       const next = await resolveTarget()
       setTarget(next)
-      if (!next) { setState("noRemote"); setRows([]); return }
+      if (!next) {
+        const local = await gitService.getHistory(200)
+        setRows(alignSyncRecords(local, []))
+        setState("noRemote")
+        return
+      }
       const remoteBranches = await gitService.listRemoteBranches(next.remote)
       if (!remoteBranches.some((item) => item.name === next.branch)) { setState("needsFetch"); setRows([]); return }
       await gitService.getRemoteHistory(next.remote, next.branch, 50)
@@ -141,7 +148,7 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", p
 
   const compareTitle = language === "zh-Hans" ? "本地 ↔ GitHub" : "Local ↔ GitHub"
   const localColumnTitle = language === "zh-Hans" ? "本地版本" : "Local Versions"
-  const githubColumnTitle = language === "zh-Hans" ? "GitHub 同步" : "GitHub Sync"
+  const githubColumnTitle = state === "noRemote" ? (language === "zh-Hans" ? "未配置 GitHub" : "GitHub Not Configured") : language === "zh-Hans" ? "GitHub 同步" : "GitHub Sync"
   const projectSubtitle = target ? `${projectName || "Source Control"} · ${target.branch}` : projectName || null
 
   return (
@@ -164,13 +171,13 @@ export function SourceControlHistoryCompareView({ gitService, language = "en", p
         </VStack>
       </Section>
       {loading ? <LoadingSection message={language === "zh-Hans" ? "正在读取版本对照…" : "Loading version comparison…"} /> : null}
-      {state === "noRemote" ? <EmptyStateSection title={language === "zh-Hans" ? "尚未连接 GitHub" : "Not connected to GitHub"} message={language === "zh-Hans" ? "请先配置 GitHub 远端。" : "Configure a GitHub remote first."} systemImage="externaldrive" /> : null}
+      {state === "noRemote" ? <Section><Text font="footnote" foregroundStyle="secondaryLabel">{language === "zh-Hans" ? "未配置 GitHub，以下仅显示本地版本历史。" : "GitHub is not configured. Showing local version history only."}</Text></Section> : null}
       {state === "needsFetch" ? <Section><Button title={language === "zh-Hans" ? "获取云端版本" : "Fetch GitHub Versions"} buttonStyle="borderedProminent" disabled={fetching} action={() => { refresh().catch(console.error) }} frame={{ minHeight: tokens.buttonHeight }} /></Section> : null}
       {state === "error" ? <>
         <ErrorSection message={errorMessage || (language === "zh-Hans" ? "无法读取版本对照。" : "Unable to load version comparison.")} title={language === "zh-Hans" ? "版本对照读取失败" : "Version comparison failed"} />
         <Section><Button title={t("retry")} action={() => { load().catch(console.error) }} frame={{ minHeight: tokens.buttonHeight }} /></Section>
       </> : null}
-      {state === "ready" && !loading ? rows.length === 0 ? <EmptyStateSection title={language === "zh-Hans" ? "暂无本地版本" : "No Local Versions"} systemImage="clock" /> : <Section>{rows.map((row) => <HStack key={row.local.oid} spacing={tokens.rowContentSpacing} alignment="top"><LocalCommitCell commit={row.local} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} /><Divider /><SyncNodeCell commit={row.local} record={row.sync} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} language={language} /></HStack>)}</Section> : null}
+      {(state === "ready" || state === "noRemote") && !loading ? rows.length === 0 ? <EmptyStateSection title={language === "zh-Hans" ? "暂无本地版本" : "No Local Versions"} systemImage="clock" /> : <Section>{rows.map((row) => <HStack key={row.local.oid} spacing={tokens.rowContentSpacing} alignment="top"><LocalCommitCell commit={row.local} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} /><Divider /><SyncNodeCell commit={row.local} record={row.sync} noRemote={state === "noRemote"} tokens={tokens} onSelect={(commit) => { openCommitDetail(commit).catch(console.error) }} language={language} /></HStack>)}</Section> : null}
       {state === "ready" && !loading && target && rows.some((row) => row.sync?.kind === "push") === false && rows.some((row) => row.sync?.kind === "baseline") ? <Section><Text font="footnote" foregroundStyle="secondaryLabel">早期同步记录未保存，从当前 GitHub 状态开始记录。</Text></Section> : null}
       </List>
     </NavigationStack>
